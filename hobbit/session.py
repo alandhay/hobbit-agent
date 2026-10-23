@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from specbot.errors import SpecbotError
 
 from .archive import EventLog, SessionFolder, Store
-from .brain import Brain, BrainError
+from .brain import Brain, BrainError, OutOfCredit
 from .config import Config
 from .rig import Frame, Rig, RigError
 from .textreader import GlyphBook, new_lines
@@ -51,6 +51,7 @@ class Runner:
         # until the operator wakes it. Resetting starts the hour again.
         self._woken = threading.Event()
         self.asleep = cfg.start_asleep
+        self.sleep_reason = "started asleep" if cfg.start_asleep else ""
         self.sleep_at = None if cfg.start_asleep else self._hour_from_now()
         self._publish_supervision()
 
@@ -64,7 +65,8 @@ class Runner:
         return time.time() + self.cfg.awake_minutes * 60 if self.cfg.awake_minutes > 0 else None
 
     def _publish_supervision(self) -> None:
-        state = {"asleep": self.asleep, "sleep_at": self.sleep_at, "awake_minutes": self.cfg.awake_minutes}
+        state = {"asleep": self.asleep, "sleep_at": self.sleep_at, "awake_minutes": self.cfg.awake_minutes,
+                 "reason": self.sleep_reason if self.asleep else ""}
         self.status = {**self.status, "supervision": state}
         self.events.emit("supervision", **state)
 
@@ -76,7 +78,7 @@ class Runner:
         elif action == "sleep":
             self.sleep_at = time.time()
         elif action == "wake":
-            self.asleep, self.sleep_at = False, self._hour_from_now()
+            self.asleep, self.sleep_at, self.sleep_reason = False, self._hour_from_now(), ""
             self._woken.set()
         else:
             raise ValueError(f"unknown action {action!r}")
@@ -84,12 +86,20 @@ class Runner:
         self._publish_supervision()
         return self.status["supervision"]
 
+    def _sleep_now(self, reason: str) -> None:
+        """Go to sleep at once (not after the move), e.g. when the API account has run out of credit."""
+        log.warning("going to sleep: %s", reason)
+        self.events.emit("error", text=f"going to sleep: {reason}")
+        self.asleep, self.sleep_at, self.sleep_reason = True, None, reason
+        self._publish_supervision()
+
     def _doze_if_due(self) -> None:
         """Between moves: if the awake period is over, freeze the game and wait to be woken."""
         if not self.asleep and (self.sleep_at is None or time.time() < self.sleep_at):
             return
         if not self.asleep:
             self.asleep, self.sleep_at = True, None
+            self.sleep_reason = self.sleep_reason or "the awake period is over"
             self._publish_supervision()
         try:
             self.rig.pause()
@@ -157,6 +167,7 @@ class Runner:
             outcome = "aborted"
             self.events.emit("error", text=f"unexpected error, attempt abandoned: {type(exc).__name__}: {exc}")
             log.exception("attempt %d abandoned", number)
+            self._stop.wait(60)                     # don't start the next one straight away
         finally:
             try:
                 self.rig.resume()
@@ -331,6 +342,8 @@ class Runner:
             review, record = self.brain.review(material, png)
         except BrainError as exc:
             self.events.emit("error", move=n, text=f"stuck review failed: {exc}")
+            if isinstance(exc, OutOfCredit):
+                self._sleep_now("the API account is out of credit")
             return None
         self.store.add_cost(record["cost_usd"])
         self.status["attempt_cost"] = round(self.status.get("attempt_cost", 0.0) + record["cost_usd"], 4)
@@ -395,17 +408,26 @@ class Runner:
             if time.monotonic() - last[0] > 0.3:
                 flush()
 
-        for attempt in (1, 2):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 decision, record = self.brain.decide(context, png, on_stream, model)
                 flush()
                 return decision, record
+            except OutOfCredit as exc:
+                self._sleep_now(f"the API account is out of credit ({exc})")
+                self._doze_if_due()
+                if self._stop.is_set():
+                    raise
+                attempt = 0
+                self._phase("thinking", move=n)
+                continue
             except BrainError as exc:
                 self.events.emit("error", move=n, text=str(exc))
-                if attempt == 2:
+                if attempt >= 2:
                     raise
                 time.sleep(5)
-        raise AssertionError("unreachable")
 
     def _context(self, number: int, n: int, lines: list[str], fresh: list[str], notes: str,
                  moves: list[Move]) -> str:
@@ -487,6 +509,8 @@ class Runner:
             kb, record = self.brain.reflect(material)
         except BrainError as exc:
             self.events.emit("error", text=f"reflection failed: {exc}")
+            if isinstance(exc, OutOfCredit):
+                self._sleep_now("the API account is out of credit")
             return ""
         self.store.add_cost(record["cost_usd"])
         self.store.save_kb(kb)

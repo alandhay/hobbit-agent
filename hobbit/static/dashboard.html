@@ -48,7 +48,8 @@
                background: var(--bg); color: var(--text); }
   .ops .msg { font: 11px var(--mono); color: var(--red); }
   .asleepCover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-                 gap: 6px; background: rgba(8, 10, 16, .72); color: var(--blue); font: 700 22px var(--mono); letter-spacing: .12em; }
+                 gap: 6px; background: rgba(8, 10, 16, .72); color: var(--blue); font: 700 22px var(--mono); letter-spacing: .12em;
+                 text-align: center; padding: 0 16px; }
   .asleepCover[hidden] { display: none; }
   .asleepCover small { font: 13px var(--sans); color: var(--dim); letter-spacing: 0; }
   .countdown { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
@@ -210,7 +211,7 @@
 <main>
   <section class="panel" id="screenPanel">
     <h2>Emulator <small>ZX Spectrum 48K · Fuse</small></h2>
-    <div class="screen"><canvas id="screen" width="320" height="240" aria-label="The emulator screen"></canvas><span class="badge live" id="badge">LIVE</span><div class="asleepCover" id="asleepCover" hidden>ASLEEP<small>The game is frozen until the operator wakes the agent.</small></div></div>
+    <div class="screen"><canvas id="screen" width="320" height="240" aria-label="The emulator screen"></canvas><span class="badge live" id="badge">LIVE</span><div class="asleepCover" id="asleepCover" hidden><span id="asleepTitle">ASLEEP</span><small id="asleepWhy">The game is frozen until the operator wakes the agent.</small></div></div>
   </section>
 
   <section class="panel" id="gamePanel">
@@ -713,13 +714,19 @@ function showSupervision(s) {
   if (!s) return;
   supervision = s;
   $("asleepCover").hidden = !s.asleep;
+  // Out of API credit gets its own words; otherwise the reason it went to sleep, if any.
+  const noCredit = /out of credit/i.test(s.reason || "");
+  $("asleepTitle").textContent = noCredit ? "GAMEPLAY PAUSED, OUT OF CREDITS" : "ASLEEP";
+  $("asleepWhy").textContent = noCredit ? "It carries on from the same move once the API account is topped up." :
+    (s.reason && s.reason !== "started asleep" ? s.reason[0].toUpperCase() + s.reason.slice(1) + ". " : "") +
+    "The game is frozen until the operator wakes the agent.";
   $("opWake").hidden = !s.asleep;
   $("opSleep").hidden = $("opReset").hidden = !!s.asleep;
   tickSleep(); updateBadge();
 }
 function tickSleep() {
   const el = $("sleep"), s = supervision;
-  if (s.asleep) { el.className = "sleep asleep"; el.textContent = "asleep"; return; }
+  if (s.asleep) { el.className = "sleep asleep"; el.textContent = /out of credit/i.test(s.reason || "") ? "paused: out of credits" : "asleep"; return; }
   if (!s.sleep_at) { el.className = "sleep"; el.textContent = ""; return; }
   const left = Math.max(0, Math.round(s.sleep_at - Date.now() / 1000));
   const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, "0");

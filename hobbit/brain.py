@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import time
 from typing import Callable
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKError,
     ResultMessage,
     StreamEvent,
     TextBlock,
@@ -168,6 +170,17 @@ class BrainError(Exception):
     pass
 
 
+class OutOfCredit(BrainError):
+    """The API account has no credit left: nothing will work until someone tops it up."""
+
+
+_NO_CREDIT = re.compile(r"credit balance is too low|insufficient (credit|funds)|billing|payment required", re.I)
+
+
+def _failure(detail: str) -> BrainError:
+    return (OutOfCredit if _NO_CREDIT.search(detail) else BrainError)(f"the model call failed: {detail}")
+
+
 class Brain:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -231,24 +244,23 @@ class Brain:
         thinking: list[str] = []
         text: list[str] = []
         result: ResultMessage | None = None
-        async for message in query(prompt=messages(), options=options):
-            if isinstance(message, StreamEvent):
-                delta = message.event.get("delta", {}) if isinstance(message.event, dict) else {}
-                if on_stream and delta.get("type") == "thinking_delta":
-                    on_stream("thinking", delta.get("thinking", ""))
-                elif on_stream and delta.get("type") == "input_json_delta":
-                    on_stream("draft", delta.get("partial_json", ""))     # the decision as it is written
-            elif isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock):
-                        thinking.append(block.thinking)
-                    elif isinstance(block, TextBlock):
-                        text.append(block.text)
-            elif isinstance(message, ResultMessage):
-                result = message
+        try:
+            async for message in self._messages(messages(), options):
+                if isinstance(message, ResultMessage):
+                    result = message
+                elif isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, ThinkingBlock):
+                            thinking.append(block.thinking)
+                        elif isinstance(block, TextBlock):
+                            text.append(block.text)
+                elif on_stream:
+                    on_stream(*message)
+        except ClaudeSDKError as exc:            # e.g. "Credit balance is too low", or the CLI stopping
+            raise _failure(str(exc)) from None
         if result is None or result.is_error or result.structured_output is None:
             detail = (result.errors if result else None) or "".join(text)[-500:] or "no result"
-            raise BrainError(f"the model call failed: {detail}")
+            raise _failure(str(detail))
         record = {
             "seconds": round(time.time() - started, 1),
             "cost_usd": result.total_cost_usd or 0.0,
@@ -257,3 +269,16 @@ class Brain:
             "model": options.model,
         }
         return result.structured_output, record
+
+    @staticmethod
+    async def _messages(prompt, options: ClaudeAgentOptions):
+        """The SDK's messages, with stream deltas turned into ("thinking" | "draft", text) pairs."""
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, StreamEvent):
+                delta = message.event.get("delta", {}) if isinstance(message.event, dict) else {}
+                if delta.get("type") == "thinking_delta":
+                    yield "thinking", delta.get("thinking", "")
+                elif delta.get("type") == "input_json_delta":
+                    yield "draft", delta.get("partial_json", "")     # the decision as it is written
+            elif isinstance(message, (AssistantMessage, ResultMessage)):
+                yield message

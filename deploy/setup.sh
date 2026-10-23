@@ -69,6 +69,7 @@ Environment=HOME=/var/lib/hobbit PYTHONUNBUFFERED=1
 ExecStart=/usr/local/bin/hobbit-run
 Restart=always
 RestartSec=5
+TimeoutStopSec=20
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/hobbit /tmp

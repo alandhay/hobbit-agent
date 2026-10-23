@@ -173,3 +173,28 @@ def test_unsupervised_runs_never_sleep_and_start_asleep_waits():
     assert r.sleep_at is None
     r._doze_if_due()                       # returns at once
     assert _runner(awake_minutes=60, start_asleep=True).asleep
+
+
+def test_out_of_credit_sleeps_at_once_and_retries_the_move_when_woken():
+    import threading
+    from hobbit.brain import OutOfCredit, _failure
+    assert isinstance(_failure("Claude Code returned an error result: Credit balance is too low"), OutOfCredit)
+    assert not isinstance(_failure("the CLI exited"), OutOfCredit)
+
+    calls = []
+
+    class Brain:
+        def decide(self, context, png, on_stream, model):
+            calls.append(model)
+            if len(calls) == 1:
+                raise OutOfCredit("Credit balance is too low")
+            return {"ok": True}, {"model": model}
+
+    r = _runner(awake_minutes=60)
+    r.brain = Brain()
+    threading.Timer(0.3, lambda: r.control("wake")).start()
+    decision, _ = r._decide(1, "context", b"png", "claude-haiku-5-5")
+    assert decision == {"ok": True} and len(calls) == 2
+    assert r.rig.paused and not r.asleep
+    sleeps = [e for e in r.events.since(0, 0) if e["kind"] == "supervision" and e["asleep"]]
+    assert sleeps and "out of credit" in sleeps[0]["reason"]

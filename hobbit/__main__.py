@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
 import time
 import webbrowser
@@ -36,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    signal.signal(signal.SIGTERM, _interrupt)      # systemctl stop: shut down cleanly, like Ctrl+C
     cfg = load_config(args.config)
     if getattr(args, "interval", None):
         cfg.move_interval_seconds = args.interval
@@ -89,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         rig.close()
+
+
+def _interrupt(signum, frame) -> None:
+    raise KeyboardInterrupt
 
 
 def _check(rig: Rig, brain: Brain, book: GlyphBook, runner: Runner) -> int:
