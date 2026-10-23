@@ -13,7 +13,7 @@ python -m venv .venv
 .venv\Scripts\pip install -e ..\spec-emulator-window claude-agent-sdk imagehash
 
 .venv\Scripts\python -m hobbit check          # load the game, read the screen, one model call; no keys pressed
-.venv\Scripts\python -m hobbit run            # play attempts back to back, one move every 2 minutes
+.venv\Scripts\python -m hobbit run            # play attempts back to back, one move every 5 minutes
                                               # dashboard: http://127.0.0.1:8800
 .venv\Scripts\python -m hobbit run --attempts 1 --max-moves 10 --interval 30   # a short trial
 ```

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class Config:
     tape: Path = ROOT / "data" / "game" / "hobbit.tzx"
     specbot_config: Path = ROOT / "specbot.toml"
-    move_interval_seconds: float = 120.0
+    move_interval_seconds: float = 300.0
     clock: str = "paused"
     brain_backend: str = "agent_sdk"
     model: str = "claude-opus-5-5"

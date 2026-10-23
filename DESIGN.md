@@ -186,7 +186,7 @@ The game may keep running while nobody types, and the agent can be slow, so time
 
 - `paused` (**chosen**): the emulator is frozen from the moment the screen settles until the next command is typed. Game time only moves while a command is being carried out. On screen it reads as "the agent is thinking…" with the emulator frozen.
 - `live` (kept as an option, off): the emulator keeps running and the agent has to cope with whatever happened meanwhile. It would show up as a different "league" in the stats.
-- `move_interval_seconds = 120` (**chosen**): one move every two minutes. The model call usually takes 10–40 s. For the rest of the interval the dashboard plays the decision out step by step (observation → interpretation → options → choice), with a countdown to the action, so the time is spent explaining rather than sitting idle. Then the command is typed.
+- `move_interval_seconds = 300` (**chosen**): one move every five minutes. The model call usually takes 10–40 s. For the rest of the interval the dashboard plays the decision out step by step (observation → interpretation → options → choice), with a countdown to the action, so the time is spent explaining rather than sitting idle. Then the command is typed.
 
 ### 5.5 Decision schema (also what viewers see)
 
@@ -400,7 +400,7 @@ This machine has Fuse 1.6.0 and a working specbot, but no Docker or WSL distribu
 |---|---|
 | Emulator | `C:/Program Files (x86)/Fuse/fuse.exe --machine 48`, restarted with `data/game/hobbit.tzx` for each attempt. With tape traps the game loads in ~3 s, so no snapshot is needed. |
 | Screen | `PrintWindow` capture, so the window may be covered. |
-| Keys | `SendInput`. Fuse comes to the front for the second or two it takes to type a command, once every 2 minutes. |
+| Keys | `SendInput`. Fuse comes to the front for the second or two it takes to type a command, once every 5 minutes. |
 | Freeze | `NtSuspendProcess` / `NtResumeProcess` on the Fuse process. The dashboard shows the last frame while the game is frozen, because a suspended window can't be captured. |
 | Text | `hobbit/textreader.py`: the game's font has a fixed 6-pixel pitch (the input line uses the 8-pixel ROM font). Rows are cut into cells and matched against a glyph book that learns from the agent's own transcriptions. One move taught it the whole opening screen. |
 | Model | Claude Agent SDK on the Claude Code login: no tools, no connectors (`strict_mcp_config`), no settings or CLAUDE.md, structured JSON output, summarised thinking streamed to the dashboard. With the connectors off, a move's prompt is ~3k tokens; with them on it was ~110k. |
@@ -408,7 +408,7 @@ This machine has Fuse 1.6.0 and a working specbot, but no Docker or WSL distribu
 
 ```
 .venv\Scripts\python -m hobbit check                                # load the game, one model call, no keys
-.venv\Scripts\python -m hobbit run                                  # attempts back to back, one move every 2 minutes
+.venv\Scripts\python -m hobbit run                                  # attempts back to back, one move every 5 minutes
 .venv\Scripts\python -m hobbit run --attempts 1 --max-moves 10 --interval 30   # a short trial
 ```
 
@@ -418,7 +418,7 @@ This machine has Fuse 1.6.0 and a working specbot, but no Docker or WSL distribu
 
 ### 12.2 Cloud: cost-efficient architecture
 
-At two minutes a move, the machine does very little: it is idle almost all the time, the picture is static between moves, and the only steady load is the video encoder. So there is no need for AWS's per-hour compute or its expensive bandwidth.
+At five minutes a move, the machine does very little: it is idle almost all the time, the picture is static between moves, and the only steady load is the video encoder. So there is no need for AWS's per-hour compute or its expensive bandwidth.
 
 ```
  one small ARM VM (Hetzner CAX21 class: 4 vCPU, 8 GB, 20 TB traffic included)
@@ -488,7 +488,7 @@ Each milestone can be tested on its own. Unit tests use injected fakes and recor
 1. Clock: **`paused`**. The game is frozen while the agent thinks.
 2. Human review notes: **an option**, `allow_human_hints = false` by default. Runs that use hints count in a separate league.
 3. Platforms: **YouTube + Twitch** through `tee`.
-4. Pace: **one move every two minutes** (`move_interval_seconds = 120`, changed from 60 on 2026-10-18). Cost assessment in §15.
+4. Pace: **one move every five minutes** (`move_interval_seconds = 300`; 60 → 120 → 300 on 2026-10-18 and 2026-10-23, to halve the model cost). Cost assessment in §15.
 
 ---
 
@@ -542,6 +542,7 @@ The interval is 30 s from the start of one move to the next action, but thinking
 | **Cloud, Hetzner-class VM, 24/7** | ~$1,515 | ~$9 | **~$1,525** |
 | Cloud, Hetzner-class VM, 24/7, Sonnet 5.5 for moves ($2/$10) | ~$760 | ~$9 | **~$770** |
 | Cloud, 24/7, back at one move every 2 minutes (~25/h) | ~$950 | ~$9 | **~$960** |
+| **Cloud, 24/7, one move every 5 minutes (12/h), as chosen** | ~$450 | ~$9 | **~$460** |
 
 **The model is practically the whole cost**, so the levers that matter are pace, effort, model choice, and how many hours a day it plays. The next lever after the output trims is effort: `low` would cut most of the ~800 thinking tokens a move (about a third of the bill), at some cost to the quality of play.
 

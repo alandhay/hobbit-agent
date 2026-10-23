@@ -4,7 +4,7 @@ tape = "data/game/hobbit.tzx"      # your own copy of the game; restarts Fuse wi
 specbot_config = "specbot.toml"    # Fuse window, capture and launch settings (48K)
 
 [pace]
-move_interval_seconds = 120        # one move every 2 minutes
+move_interval_seconds = 300        # one move every 5 minutes
 clock = "paused"                   # the emulator is frozen while the agent thinks
 
 [brain]
