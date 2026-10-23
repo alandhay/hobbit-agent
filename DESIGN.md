@@ -454,6 +454,20 @@ Prices are approximate; check them with the provider before committing.
 
 ---
 
+### 12.3 Built (2026-10-23): AWS Lightsail, supervised
+
+The user chose AWS, so the server is Lightsail `medium_3_0` (2 vCPU, 4 GB, 4 TB traffic, $24/month) in us-east-1, without Docker: `deploy/setup.sh` installs everything with apt and runs one systemd service.
+
+| Piece | Form |
+|---|---|
+| Emulator | `fuse-sdl --machine 48` on its own Xvfb display (specbot's X11 backend), frozen with SIGSTOP between moves. Its sound is tapped (SDL disk driver, 48 kHz 16-bit stereo). Tested: loads in ~5 s, reads the screen with the existing glyph book, typing echoes. |
+| Model | The same Agent SDK brain, with `ANTHROPIC_API_KEY` in the environment instead of a Claude Code login, so the reported cost is now the real bill. |
+| Supervision | `[supervision] awake_minutes = 60`: the agent plays an hour, then sleeps (game frozen, no model calls) at the next move boundary. The service starts asleep. The dashboard shows "sleeps in mm:ss"; with `?operator` it shows Reset timer / Sleep now / Wake, which `POST /api/control` with the operator password as a Bearer token. |
+| Broadcast | `hobbit/broadcast.py`: Chrome (kiosk, 1280×720) shows the dashboard on a second Xvfb display; ffmpeg captures it at 30 fps with the emulator's sound (silence while frozen, fed at a steady real-time rate) and sends H.264 2.5 Mbps + AAC to YouTube. Chrome and ffmpeg are restarted if they stop; the stream key is blanked in the logs. Measured: ~33% of the server's CPU (ffmpeg about half a core). The stream keeps running while the agent sleeps. |
+| HTTPS | Caddy with a free certificate for `<ip>.sslip.io`, proxying to the dashboard on 127.0.0.1:8800. Only ports 22, 80 and 443 are open. |
+
+**Watch:** Lightsail instances are burstable. At ~33% CPU around the clock, check the burst capacity metric (`aws lightsail get-instance-metric-data --metric-name BurstCapacityPercentage ...`) over the first day; if it drains, drop the broadcast to 15 fps or move to `large_3_0`.
+
 ## 13. Build plan
 
 | Milestone | Delivers | Done when |

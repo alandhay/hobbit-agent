@@ -270,6 +270,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const MARK = {works: "✔", fails: "✖", unsure: "?"};
 const VERDICT = {met: "✔", partly: "≈", not_met: "✖", "n/a": "·"};
+let supervision = {asleep: false, sleep_at: null};
 const PHASE = {asleep: "ASLEEP", thinking: "THINKING", explaining: "EXPLAINING", acting: "ACTING", loading: "LOADING GAME", reflecting: "REFLECTING", reviewing: "STEPPING BACK", idle: "IDLE"};
 let after = 0, interval = 120, phase = "idle", actAt = 0, currentPlace = "", map = {nodes: {}, edges: []};
 let viewing = null, frames = {}, journalEmpty = true, gameEmpty = true, lastMove = 0;
@@ -343,6 +344,7 @@ setInterval(() => {
 
 function updateBadge() {
   const b = $("badge");
+  b.hidden = supervision.asleep && !viewing;
   if (viewing) { b.className = "badge past"; b.textContent = `MOVE ${viewing} · BACK TO LIVE`; }
   else if (phase === "thinking" || phase === "explaining") { b.className = "badge frozen"; b.textContent = "GAME FROZEN · AGENT THINKING"; }
   else { b.className = "badge live"; b.textContent = "LIVE"; }
@@ -707,14 +709,13 @@ function handle(ev, live) {
 }
 
 // ---------- supervision: countdown to sleep, and the operator's buttons ----------
-let supervision = {asleep: false, sleep_at: null};
 function showSupervision(s) {
   if (!s) return;
   supervision = s;
   $("asleepCover").hidden = !s.asleep;
   $("opWake").hidden = !s.asleep;
   $("opSleep").hidden = $("opReset").hidden = !!s.asleep;
-  tickSleep();
+  tickSleep(); updateBadge();
 }
 function tickSleep() {
   const el = $("sleep"), s = supervision;

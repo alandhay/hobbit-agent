@@ -20,6 +20,21 @@ python -m venv .venv
 
 Settings are in `hobbit.toml` (pace, models, effort, limits, daily cost cap). Routine moves go to Claude Haiku 5.5 and moves that need judgment to Claude Sonnet 5.5 (DESIGN §15.5). Fuse comes to the front for a second or two each time a command is typed, so don't type into other windows while it plays. Ctrl+C stops it, and the game is unfrozen on exit.
 
+## Running on the server (AWS Lightsail)
+
+One Lightsail server (Ubuntu 24.04, 2 vCPU / 4 GB, $24/month) runs the emulator, the agent, the dashboard and the YouTube broadcast. From Git Bash, with the AWS CLI signed in:
+
+```
+bash deploy/create.sh                 # the server, a static IP, ports 22/80/443 only (once)
+cp deploy/hobbit.env.example deploy/hobbit.env    # then fill in the API key and the YouTube stream key
+bash deploy/push.sh <server-ip>       # install or update (sends the committed code, the tape, and the memory the first time)
+```
+
+- Dashboard: `https://<ip-with-dashes>.sslip.io/`. Add `?operator` for the buttons (Reset timer, Sleep now, Wake); they ask for `HOBBIT_OPERATOR_PASSWORD` from `deploy/hobbit.env`.
+- It is **supervised**: the service starts asleep (game frozen, no model calls). Wake plays for `awake_minutes` (60), counting down on the page, then it sleeps again. Reset timer starts the hour again.
+- The broadcast (Chrome showing the dashboard, plus the game's sound) goes to YouTube whenever `YOUTUBE_STREAM_KEY` is set, asleep or awake.
+- Logs: `ssh ubuntu@<ip> sudo journalctl -u hobbit -f`; ffmpeg's warnings in `/var/lib/hobbit/logs/ffmpeg.log`.
+
 ## Where things go
 
 | Path | What |

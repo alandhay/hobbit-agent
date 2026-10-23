@@ -71,7 +71,8 @@ class Runner:
     def control(self, action: str) -> dict:
         """The operator's buttons: 'reset' (another full awake period), 'sleep' (after this move), 'wake'."""
         if action == "reset":
-            self.sleep_at = self._hour_from_now()
+            if not self.asleep:                     # asleep, only Wake starts it again
+                self.sleep_at = self._hour_from_now()
         elif action == "sleep":
             self.sleep_at = time.time()
         elif action == "wake":
@@ -88,7 +89,7 @@ class Runner:
         if not self.asleep and (self.sleep_at is None or time.time() < self.sleep_at):
             return
         if not self.asleep:
-            self.asleep = True
+            self.asleep, self.sleep_at = True, None
             self._publish_supervision()
         try:
             self.rig.pause()
