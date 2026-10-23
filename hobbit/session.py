@@ -74,7 +74,8 @@ class Runner:
         self.events.sink = folder.path / "events.jsonl"
         started = time.time()
         folder.write("session.json", {"id": folder.id, "attempt": number, "started": started,
-                                      "model": self.cfg.model, "effort": self.cfg.effort, "clock": self.cfg.clock,
+                                      "model": self.cfg.model, "move_model": self.cfg.move_model,
+                                      "effort": self.cfg.effort, "clock": self.cfg.clock,
                                       "move_interval_seconds": self.cfg.move_interval_seconds,
                                       "kb_version": self.store.kb.get("version", 0),
                                       "allow_human_hints": self.cfg.allow_human_hints})
@@ -113,7 +114,8 @@ class Runner:
         folder.write("session.json", {"id": folder.id, "attempt": number, "started": started, "ended": time.time(),
                                       "outcome": outcome, "moves": len(moves), "recalled": recalled,
                                       "cost_usd": self.status.get("attempt_cost", 0.0), "summary": summary,
-                                      "model": self.cfg.model, "effort": self.cfg.effort})
+                                      "model": self.cfg.model, "move_model": self.cfg.move_model,
+                                      "effort": self.cfg.effort})
         self.events.sink = None
         if stop_reason:
             raise StopRun(stop_reason)
@@ -147,8 +149,9 @@ class Runner:
 
             self.rig.pause()
             self._phase("thinking", move=n)
-            decision, record = self._think(number, n, png, lines, fresh, notes, moves)
+            decision, record = self._think(number, n, png, lines, fresh, notes, moves, found)
             self.store.add_cost(record["cost_usd"])
+            self.store.add_model_move(record["model"], record["escalated"])
             self.status["attempt_cost"] = round(self.status.get("attempt_cost", 0.0) + record["cost_usd"], 4)
             folder.save_brain_call(n, {**record, "decision": decision})
 
@@ -189,7 +192,8 @@ class Runner:
                 self.advice = ""
             prev_place, prev_lines, notes = place, lines, decision["notes"]
             self.events.emit("decision", move=n, decision=decision, seconds=record["seconds"],
-                             cost_usd=record["cost_usd"], stats=self.stats(),
+                             cost_usd=record["cost_usd"], model=record["model"], escalated=record["escalated"],
+                             stats=self.stats(),
                              stalled=self.stalled, stall_limit=self.cfg.max_stale_moves)
 
             for state in ending:
@@ -229,7 +233,8 @@ class Runner:
                              "place": place, "mode": decision["mode"], "confidence": decision["confidence"],
                              "previous_verdict": decision["previous_verdict"], "previous_note": decision["previous_note"],
                              "evidence": decision["evidence"], "echoed": echoed, "error": move.error,
-                             "seconds": record["seconds"], "cost_usd": record["cost_usd"]})
+                             "seconds": record["seconds"], "cost_usd": record["cost_usd"],
+                             "model": record["model"], "escalated": record["escalated"]})
             folder.add_transcript(f"[{n}] {place}: {_action_label(action)}   (expects: {decision['expected']})")
             self.events.emit("action", move=n, action=action, echoed=echoed, error=move.error)
         return "stopped:move_limit", moves, recalled
@@ -297,8 +302,27 @@ class Runner:
         return bands[-1].text if bands else ""
 
     def _think(self, number: int, n: int, png: bytes, lines: list[str], fresh: list[str],
-               notes: str, moves: list[Move]) -> tuple[dict, dict]:
+               notes: str, moves: list[Move], found: set[str]) -> tuple[dict, dict]:
+        """One decision. Routine moves go to the cheap move model; moves that need judgment go to the
+        main model, either straight away or after the move model's answer shows it was out of its depth."""
         context = self._context(number, n, lines, fresh, notes, moves)
+        cheap, main = self.cfg.move_model, self.cfg.model
+        reasons = escalate_before(n, moves, self.stalled) if cheap and cheap != main else []
+        if not cheap or cheap == main or reasons:
+            decision, record = self._decide(n, context, png, main)
+            return decision, {**record, "escalated": reasons}
+        decision, record = self._decide(n, context, png, cheap)
+        reasons = escalate_after(decision, found, self.cfg.escalate_below_confidence)
+        if not reasons:
+            return decision, {**record, "escalated": []}
+        self.events.emit("escalate", move=n, reasons=reasons, model=main, first_model=cheap)
+        first = {"model": cheap, "decision": decision, "seconds": record["seconds"], "cost_usd": record["cost_usd"]}
+        decision, second = self._decide(n, context, png, main)
+        return decision, {**second, "escalated": reasons, "first": first,
+                          "seconds": round(second["seconds"] + first["seconds"], 1),
+                          "cost_usd": second["cost_usd"] + first["cost_usd"]}
+
+    def _decide(self, n: int, context: str, png: bytes, model: str) -> tuple[dict, dict]:
         buffers: dict[str, list[str]] = {"thinking": [], "draft": []}
         last = [time.monotonic()]
 
@@ -316,7 +340,7 @@ class Runner:
 
         for attempt in (1, 2):
             try:
-                decision, record = self.brain.decide(context, png, on_stream)
+                decision, record = self.brain.decide(context, png, on_stream, model)
                 flush()
                 return decision, record
             except BrainError as exc:
@@ -422,7 +446,38 @@ class Runner:
                 "characters": len(self.store.entities["characters"]), "objects": len(self.store.entities["objects"]),
                 "gameplay": len(self.store.entities["gameplay"]), "cost_today": round(self.store.cost_today(), 2),
                 "recalled_total": s["recalled_total"], "glyphs": len(self.book.glyphs),
-                "predictions": s["predictions"]}
+                "predictions": s["predictions"], "moves_by_model": s["moves_by_model"],
+                "escalations": s["escalations"]}
+
+
+def escalate_before(n: int, moves: list[Move], stalled: int) -> list[str]:
+    """Moves that go straight to the main model, before the move model is asked."""
+    reasons = []
+    if n == 1:
+        reasons.append("first move of the attempt")
+    if moves and moves[-1].error:
+        reasons.append("the last action had a problem")
+    if stalled >= WARN_STALLED:
+        reasons.append(f"no progress for {stalled} moves")
+    return reasons
+
+
+def escalate_after(decision: dict, found: set[str], min_confidence: float) -> list[str]:
+    """Reasons to redo the move model's decision with the main model, judged from that decision."""
+    reasons = []
+    if decision["previous_verdict"] == "not_met":
+        reasons.append("the last prediction failed")
+    if decision["game_state"] in ("game_over", "won", "unknown"):
+        reasons.append(f"game state: {decision['game_state']}")
+    place = decision["place"].strip()
+    if place and place != "unknown" and f"place:{place.lower()}" not in found:
+        reasons.append("a new place")
+    if decision["confidence"] < min_confidence:
+        reasons.append(f"low confidence ({decision['confidence']:.2f})")
+    options = decision["options"]
+    if options and 0 <= decision["chosen"] < len(options) and options[decision["chosen"]]["risk"] == "high":
+        reasons.append("a high-risk move")
+    return reasons
 
 
 def _action_label(action: dict) -> str:

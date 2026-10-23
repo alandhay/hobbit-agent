@@ -9,9 +9,10 @@ clock = "paused"                   # the emulator is frozen while the agent thin
 
 [brain]
 backend = "agent_sdk"              # uses the Claude Code login on this machine (no API key)
-model = "claude-opus-5-5"
+move_model = "claude-haiku-5-5"    # routine moves ("" = every move goes to `model`)
+model = "claude-sonnet-5-5"        # moves that need judgment, stuck reviews, reflection
 effort = "medium"
-side_model = "claude-haiku-5-5"    # glyph labelling checks, reflection summaries
+escalate_below_confidence = 0.6    # a routine move this unsure is redone by `model`
 
 [limits]
 max_moves_per_attempt = 300

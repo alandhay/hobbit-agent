@@ -554,3 +554,23 @@ The interval is 30 s from the start of one move to the next action, but thinking
 - **Free moves**: following a known route on the map takes no model call (§10.3; not built yet).
 - **Flat context**: no old images and a fixed window of recent moves, so a move's cost doesn't grow with the length of the attempt.
 - **Spend on screen**: "spent today" is one of the dashboard stats.
+
+### 15.5 Model mix: Haiku for routine moves, Sonnet for judgment (built 2026-10-23)
+
+`move_model` (Claude Haiku 5.5) makes routine moves; `model` (Claude Sonnet 5.5) makes the rest, plus the stuck reviews and the reflection. A move goes to Sonnet:
+
+- **straight away** on the first move of an attempt, after an action that had a problem, or after `WARN_STALLED` moves without progress;
+- **after Haiku has answered**, if Haiku's own decision says the last prediction failed, it is in a place new to this attempt, the game may have ended (`game_over`, `won`, `unknown`), its confidence is below `escalate_below_confidence` (0.6), or the chosen option is high-risk. Haiku's answer is kept in the brain record under `first`, and both costs are counted.
+
+The dashboard shows which model made each move and why it was handed on. `stats.json` counts moves by model (`moves_by_model`) and escalations by reason (`escalations`), so the share that reaches Sonnet is measured, not assumed.
+
+**First measurement** (two saved screens from attempt 1, local, Claude Code login): the context has grown to ~20k tokens a move as the memory filled up, against ~8k in §15.1. Haiku cost ~$0.005 a move (it thinks at length: 3–4k output tokens, 17–34 s), Sonnet ~$0.035–0.046. Both chose the same action on both screens.
+
+| Per month, 24/7, 5-minute pace (~8,760 moves) | Model cost |
+|---|---|
+| Opus for every move (re-estimated at ~20k context, ~$0.09 a move) | ~$800 |
+| Sonnet for every move (~$0.04) | ~$350 |
+| **Mix, 30% of moves escalated** (0.7 × $0.005 + 0.3 × ($0.005 + $0.04)) | **~$150** |
+| Mix, 50% escalated | ~$240 |
+
+On the API (§12.2) these fall further, since the per-move context isn't written to the 1-hour cache at double price. Shrinking the context (fewer facts per place, a cap on the characters and objects lists) is now the next lever after the model mix.

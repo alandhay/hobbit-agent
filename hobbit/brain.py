@@ -195,13 +195,14 @@ class Brain:
             include_partial_messages=True,
         )
 
-    def decide(self, context: str, png: bytes, on_stream: Callable[[str, str], None] | None = None) -> tuple[dict, dict]:
+    def decide(self, context: str, png: bytes, on_stream: Callable[[str, str], None] | None = None,
+               model: str | None = None) -> tuple[dict, dict]:
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                          "data": base64.b64encode(png).decode()}},
             {"type": "text", "text": context},
         ]
-        options = self._options(self.system, DECISION_SCHEMA, self.cfg.effort, self.cfg.model)
+        options = self._options(self.system, DECISION_SCHEMA, self.cfg.effort, model or self.cfg.model)
         decision, record = asyncio.run(self._run(content, options, on_stream))
         if not 0 <= decision.get("chosen", -1) < len(decision.get("options", [])):
             decision["chosen"] = 0

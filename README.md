@@ -18,7 +18,7 @@ python -m venv .venv
 .venv\Scripts\python -m hobbit run --attempts 1 --max-moves 10 --interval 30   # a short trial
 ```
 
-Settings are in `hobbit.toml` (pace, model, effort, limits, daily cost cap). Fuse comes to the front for a second or two each time a command is typed, so don't type into other windows while it plays. Ctrl+C stops it, and the game is unfrozen on exit.
+Settings are in `hobbit.toml` (pace, models, effort, limits, daily cost cap). Routine moves go to Claude Haiku 5.5 and moves that need judgment to Claude Sonnet 5.5 (DESIGN §15.5). Fuse comes to the front for a second or two each time a command is typed, so don't type into other windows while it plays. Ctrl+C stops it, and the game is unfrozen on exit.
 
 ## Where things go
 

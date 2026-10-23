@@ -411,9 +411,13 @@ function renderDraft() {
   if (d) render(d, growingField(draft));
 }
 
-function showDecision(d, move, seconds) {
+// "claude-haiku-5-5" -> "Haiku 5.5"
+const modelName = m => m ? m.replace(/^claude-/, "").replace(/-(\d+)-(\d+)$/, " $1.$2").replace(/^./, c => c.toUpperCase()) : "";
+
+function showDecision(d, move, seconds, model, escalated) {
   render(d, null);
-  $("agentMeta").textContent = `move ${move} · ${d.place} · decided in ${Math.round(seconds || 0)}s`;
+  const why = escalated && escalated.length ? ` (${escalated.join(", ")})` : "";
+  $("agentMeta").textContent = `move ${move} · ${d.place} · ${modelName(model)}${why} · decided in ${Math.round(seconds || 0)}s`;
   currentPlace = d.place;
 }
 
@@ -458,7 +462,7 @@ function journalMove(ev, d) {
   const verdict = d.previous_verdict || (d.previous_check ? d.previous_check.verdict : "n/a");
   journalAdd(`<li data-move="${ev.move}" title="${esc(d.interpretation)}"><span class="n">${ev.move}</span>` +
     `<span class="v">${VERDICT[verdict] || "·"}</span><span><span class="what">${esc(label(d.action))}</span>` +
-    `<span class="where">${esc(d.place)} · ${esc(d.mode)}</span></span></li>`);
+    `<span class="where">${esc(d.place)} · ${esc(d.mode)}${ev.model ? " · " + esc(modelName(ev.model)) : ""}</span></span></li>`);
 }
 
 $("journal").addEventListener("click", e => {
@@ -628,10 +632,15 @@ function handle(ev, live) {
       if (ev.move === 1 && ev.lines.length) gameLog(ev.lines.map(l => `<div class="line">${esc(l)}</div>`).join(""));
       break;
     case "glyphs": break;
+    case "escalate":
+      // The move model's answer is set aside; the main model's stream starts afresh.
+      draft = ""; thoughts = "";
+      if (live) { render({}, null); $("agentMeta").textContent = `move ${ev.move} · handed to ${modelName(ev.model)}: ${ev.reasons.join(", ")}`; }
+      break;
     case "thinking": thoughts += ev.text; if (live) renderDraft(); break;
     case "draft": draft += ev.text; if (live) renderDraft(); break;
     case "decision":
-      showDecision(ev.decision, ev.move, ev.seconds); journalMove(ev, ev.decision); showStats(ev.stats);
+      showDecision(ev.decision, ev.move, ev.seconds, ev.model, ev.escalated); journalMove(ev, ev.decision); showStats(ev.stats);
       if (ev.stall_limit) showStall(ev.stalled, ev.stall_limit);
       if (live) refreshState(); break;
     case "review":

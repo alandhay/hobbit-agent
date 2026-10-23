@@ -110,3 +110,28 @@ def test_progress_needs_something_new_to_this_attempt():
     assert Runner._progressed("hall", seen(what=["chest"]), found)
     assert Runner._progressed("dungeon", seen(), found)
     assert not Runner._progressed("Dungeon", seen(["Gandalf"]), found)     # waiting in the same place
+
+
+def _decision(**over):
+    d = {"previous_verdict": "met", "game_state": "playing", "place": "hall", "confidence": 0.8,
+         "chosen": 0, "options": [{"risk": "low"}]}
+    return {**d, **over}
+
+
+def test_routine_move_stays_with_the_move_model():
+    from hobbit.session import Move, escalate_after, escalate_before
+    assert escalate_before(5, [Move(4, {"kind": "type", "text": "EAST"}, "", "hall")], stalled=0) == []
+    assert escalate_after(_decision(), {"place:hall"}, 0.6) == []
+
+
+def test_moves_that_need_judgment_go_to_the_main_model():
+    from hobbit.session import Move, escalate_after, escalate_before
+    assert escalate_before(1, [], 0) == ["first move of the attempt"]
+    assert escalate_before(9, [Move(8, {}, "", "hall", error="echo")], 6) == [
+        "the last action had a problem", "no progress for 6 moves"]
+    found = {"place:hall"}
+    assert escalate_after(_decision(previous_verdict="not_met"), found, 0.6) == ["the last prediction failed"]
+    assert escalate_after(_decision(place="Rivendell"), found, 0.6) == ["a new place"]
+    assert escalate_after(_decision(game_state="game_over"), found, 0.6) == ["game state: game_over"]
+    assert escalate_after(_decision(confidence=0.4), found, 0.6) == ["low confidence (0.40)"]
+    assert escalate_after(_decision(options=[{"risk": "high"}]), found, 0.6) == ["a high-risk move"]
