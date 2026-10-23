@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# your own copy of the game, and everything the agent produces
+data/game/
+data/agent-cwd/
+data/*.json
+sessions/
+logs/

@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hobbit Agent</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #12161f; --panel-2: #181d28; --line: #242b3a; --text: #e7e9ef; --dim: #8a93a8; --faint: #5b6478;
+    --cyan: #3fd8e8; --yellow: #f4cf4a; --magenta: #e45bd6; --green: #5ad38a; --red: #ef6464; --blue: #6aa8ff; --violet: #b39bff;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
+  body { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 10px 14px 8px; font: 600 11px/1 var(--mono); letter-spacing: .14em; color: var(--dim); text-transform: uppercase;
+                display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .panel h2 small { font: 11px var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint); }
+  .scroll { overflow: auto; min-height: 0; flex: 1; padding: 0 14px 12px; }
+  .scroll::-webkit-scrollbar { width: 8px; } .scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+  /* ---- top bar ---- */
+  header { display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: #0e1118; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font: 700 15px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+  .stripe { display: inline-flex; transform: skewX(-20deg); }
+  .stripe i { width: 7px; height: 18px; display: block; }
+  .brand small { font: 12px var(--sans); color: var(--dim); letter-spacing: 0; }
+  .where { font: 600 13px var(--mono); color: var(--text); white-space: nowrap; }
+  .chip { font: 700 11px var(--mono); padding: 4px 9px; border-radius: 999px; letter-spacing: .08em; white-space: nowrap; }
+  .chip.thinking { background: var(--violet); color: #120c24; } .chip.explaining { background: var(--blue); color: #08142a; }
+  .chip.acting { background: var(--yellow); color: #231c00; } .chip.loading, .chip.reflecting { background: var(--cyan); color: #00262a; }
+  .chip.idle { background: var(--line); color: var(--dim); }
+  .chip.reviewing { background: #f29a4a; color: #2a1400; }
+  .countdown { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .countdown div { height: 100%; width: 0; background: var(--blue); transition: width 1s linear; }
+  .stats { display: flex; gap: 16px; margin-left: auto; flex-wrap: wrap; }
+  .stat { text-align: right; } .stat b { display: block; font: 700 17px/1.1 var(--mono); } .stat span { font-size: 11px; color: var(--dim); white-space: nowrap; }
+
+  /* ---- main grid ---- */
+  main { display: grid; gap: 12px; padding: 12px; min-height: 0;
+         grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, .8fr);
+         grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+         grid-template-areas: "screen agent journal" "game agent side"; }
+  #screenPanel { grid-area: screen; } #gamePanel { grid-area: game; } #agentPanel { grid-area: agent; }
+  #journalPanel { grid-area: journal; } #sidePanel { grid-area: side; }
+
+  .screen { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; position: relative; margin: 0 14px 14px; border-radius: 6px; }
+  .screen canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  .badge { position: absolute; top: 10px; left: 10px; font: 700 11px var(--mono); padding: 4px 9px; border-radius: 4px; letter-spacing: .08em; }
+  .badge.live { background: var(--red); color: #fff; } .badge.frozen { background: var(--violet); color: #120c24; } .badge.past { background: var(--yellow); color: #231c00; cursor: pointer; }
+
+  /* game transcript */
+  .gamelog { font: 13px/1.55 var(--mono); }
+  .gamelog .cmd { color: var(--yellow); margin-top: 8px; }
+  .gamelog .cmd small { color: var(--faint); margin-left: 6px; }
+  .gamelog .line { color: #d8dce6; white-space: pre-wrap; }
+  .gamelog .line.fresh { color: var(--cyan); }
+  .gamelog .none { color: var(--faint); font-style: italic; }
+
+  /* agent panel */
+  #agentPanel .scroll { display: flex; flex-direction: column; gap: 12px; }
+  .thoughts { font: italic 12.5px/1.5 var(--sans); color: #a596d9; white-space: pre-wrap; background: #151229; border: 1px solid #2c2550;
+              border-radius: 8px; padding: 8px 12px; max-height: 140px; overflow: auto; }
+  .waiting { color: var(--faint); font-style: italic; }
+  .cursor { display: inline-block; width: 7px; height: 14px; background: var(--violet); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .step { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 10px; padding: 8px 10px; border-radius: 8px; border-left: 3px solid transparent; }
+  .step.writing { background: #151229; border-left-color: var(--violet); }
+  .step > .label { font: 700 11px/1.9 var(--mono); color: var(--dim); letter-spacing: .1em; }
+  .step.do { background: #1a170b; border-left-color: var(--yellow); }
+  .notes { font-size: 13px; color: var(--dim); white-space: pre-wrap; }
+  .verdict { font: 700 11px var(--mono); padding: 2px 8px; border-radius: 4px; margin-right: 6px; }
+  .verdict.met { background: var(--green); color: #032010; } .verdict.partly { background: var(--yellow); color: #231c00; }
+  .verdict.not_met { background: var(--red); color: #fff; } .verdict.na { background: var(--line); color: var(--dim); }
+  .options { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .options li { border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; color: var(--dim); }
+  .options li b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+  .options li.chosen { border-color: var(--yellow); background: #1d1a0c; color: var(--text); }
+  .risk { font: 10px var(--mono); padding: 1px 6px; border-radius: 3px; margin-left: 6px; text-transform: uppercase; }
+  .risk.low { background: #12301f; color: var(--green); } .risk.medium { background: #33290b; color: var(--yellow); } .risk.high { background: #3a1414; color: var(--red); }
+  .action { font: 700 20px var(--mono); color: var(--yellow); }
+  .conf { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 6px 0 4px; max-width: 260px; }
+  .conf div { height: 100%; background: var(--yellow); }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  .tags span { font: 11px var(--mono); padding: 1px 7px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim); }
+  .meta { color: var(--dim); font-size: 12.5px; }
+
+  /* journal */
+  .journal { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .journal li { display: grid; grid-template-columns: 34px 18px minmax(0, 1fr); gap: 6px; padding: 5px 6px; border-radius: 6px; cursor: pointer; align-items: baseline; }
+  .journal li:hover, .journal li.sel { background: var(--panel-2); }
+  .journal .n { font: 12px var(--mono); color: var(--faint); text-align: right; }
+  .journal .v { font-size: 13px; } .journal .what { font: 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .journal .where { font: 11.5px var(--sans); color: var(--dim); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .journal .review { grid-template-columns: 1fr; cursor: default; font: 12px/1.45 var(--sans); color: #f2b47a;
+    background: #2a1d10; border: 1px solid #4a3218; }
+  .journal .review b { font: 700 11px var(--mono); letter-spacing: .06em; color: #f29a4a; }
+  .journal .review.resign, .journal .review.limit { color: #f5a3a3; background: #2c1414; border-color: #552424; }
+  .journal .review.resign b, .journal .review.limit b { color: var(--red); }
+  .stall { display: none; margin: 0 10px 6px; font: 11.5px var(--mono); color: var(--dim); }
+  .stall.on { display: block; }
+  .stall .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 3px; overflow: hidden; }
+  .stall .bar div { height: 100%; background: var(--yellow); width: 0; transition: width .4s; }
+  .stall.high { color: #f2b47a; } .stall.high .bar div { background: #f29a4a; }
+  .stall.critical { color: var(--red); } .stall.critical .bar div { background: var(--red); }
+  .stall .plan { display: block; color: #f2b47a; font: italic 12px/1.4 var(--sans); margin-top: 3px; }
+  .journal .attempt { grid-template-columns: 1fr; color: var(--cyan); font: 700 11px var(--mono); letter-spacing: .08em; cursor: default; padding-top: 10px; }
+
+  /* side: map + lessons */
+  .tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
+  .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim); padding: 6px 10px 8px;
+                 font: 600 12px var(--sans); cursor: pointer; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--cyan); }
+  .tabs .count { font: 11px var(--mono); color: var(--faint); margin-left: 3px; }
+  .tabs button.flash .count { color: var(--yellow); }
+  .tab { flex: 1; min-height: 0; padding-top: 10px; }
+  #tab-map { display: flex; flex-direction: column; padding: 6px 12px 10px; }
+  #tab-map[hidden], .tab[hidden] { display: none; }
+  .legend { font-size: 11px; }
+  .who-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--magenta); vertical-align: -1px; }
+  #map { flex: 1; width: 100%; min-height: 0; }
+  #map .who { fill: var(--magenta); stroke: #12161f; stroke-width: 1.5; }
+  #map .who-label { font: 9.5px var(--mono); fill: #f4b4ee; }
+  .cards { display: flex; flex-direction: column; gap: 10px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--panel-2); }
+  .card.here { border-color: var(--yellow); }
+  .card.new { animation: glow 2.5s ease-out; }
+  @keyframes glow { from { box-shadow: 0 0 0 2px var(--yellow); } to { box-shadow: 0 0 0 0 transparent; } }
+  .card h3 { margin: 0 0 3px; font: 700 14px var(--sans); display: flex; justify-content: space-between; gap: 8px; }
+  .card h3 small { font: 11px var(--mono); color: var(--faint); font-weight: 400; }
+  .card .seen { font-size: 12.5px; color: var(--dim); }
+  .card .seen b { color: var(--text); font-weight: 600; }
+  .card ul { margin: 6px 0 0; padding-left: 16px; font-size: 13px; }
+  .card ul li { margin: 2px 0; }
+  .card ul li.fresh { color: var(--yellow); }
+  .card .trail { font: 11.5px var(--mono); color: var(--faint); margin-top: 5px; }
+  .sub { margin: 4px 0 6px; font: 700 11px var(--mono); letter-spacing: .1em; color: var(--dim); text-transform: uppercase; }
+  .sub + * { margin-bottom: 14px; }
+  #gameplay ul { margin: 0; padding-left: 16px; font-size: 13px; } #gameplay li { margin: 3px 0; } #gameplay li.fresh { color: var(--yellow); }
+  #map .thing { fill: var(--cyan); stroke: #12161f; stroke-width: 1.5; }
+  .thing-dot { display: inline-block; width: 8px; height: 8px; background: var(--cyan); vertical-align: -1px; }
+  #map text { font: 10px var(--mono); fill: var(--text); }
+  #map .edge { stroke: #3e4860; stroke-width: 1.5; } #map .node { fill: #1d2433; stroke: #4b5675; stroke-width: 1.5; }
+  #map .here { fill: var(--yellow); stroke: var(--yellow); } #map .death { stroke: var(--red); stroke-width: 2.5; }
+  .lessons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .lessons li { display: grid; grid-template-columns: 18px minmax(0, 1fr) 34px; gap: 6px; }
+  .lessons .k.works { color: var(--green); } .lessons .k.fails { color: var(--red); } .lessons .k.unsure { color: var(--yellow); }
+  .lessons .c { font: 11px var(--mono); color: var(--faint); text-align: right; }
+  .lessons li.empty, .lessons li.meta { display: block; }
+  .empty { color: var(--faint); font-style: italic; font-size: 13px; }
+
+  @media (max-width: 1200px) {
+    body { height: auto; display: block; }
+    main { grid-template-columns: 1fr; grid-template-rows: auto;
+           grid-template-areas: "screen" "agent" "game" "journal" "side"; }
+    #screenPanel .screen { aspect-ratio: 4 / 3; flex: none; }
+    #gamePanel, #journalPanel { height: 340px; } #agentPanel { max-height: none; } #sidePanel { height: 520px; }
+    .stats { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="stripe"><i style="background:#e8312f"></i><i style="background:#f4cf4a"></i><i style="background:#5ad38a"></i><i style="background:#3fd8e8"></i></span>
+    THE HOBBIT <small>an AI agent learning to play from first principles</small></div>
+  <div class="where">attempt <span id="attempt">–</span> · move <span id="move">–</span></div>
+  <span class="chip idle" id="phase">idle</span>
+  <div class="countdown" title="time until the agent acts"><div id="countdown"></div></div>
+  <span class="meta" id="countdownText"></span>
+  <div class="stats">
+    <div class="stat"><b id="s-attempts">0</b><span>attempts</span></div>
+    <div class="stat"><b id="s-best">0</b><span>best run (moves)</span></div>
+    <div class="stat"><b id="s-deaths">0</b><span>deaths</span></div>
+    <div class="stat"><b id="s-places">0</b><span>places mapped</span></div>
+    <div class="stat"><b id="s-people">0</b><span>characters met</span></div>
+    <div class="stat"><b id="s-lessons">0</b><span>lessons</span></div>
+    <div class="stat"><b id="s-pred">–</b><span>predictions right</span></div>
+    <div class="stat"><b id="s-cost">$0.00</b><span>spent today</span></div>
+  </div>
+</header>
+
+<main>
+  <section class="panel" id="screenPanel">
+    <h2>Emulator <small>ZX Spectrum 48K · Fuse</small></h2>
+    <div class="screen"><canvas id="screen" width="320" height="240" aria-label="The emulator screen"></canvas><span class="badge live" id="badge">LIVE</span></div>
+  </section>
+
+  <section class="panel" id="gamePanel">
+    <h2>The game says <small>read off the screen, with the agent's commands</small></h2>
+    <div class="scroll gamelog" id="gamelog"><div class="none">Nothing yet.</div></div>
+  </section>
+
+  <section class="panel" id="agentPanel">
+    <h2>The agent's thinking <small id="agentMeta"></small></h2>
+    <div class="stall" id="stall"><span id="stallText"></span><div class="bar"><div id="stallBar"></div></div><span class="plan" id="stallPlan"></span></div>
+    <div class="scroll" id="agentBody">
+      <div class="waiting" id="waiting">Waiting for the agent's first move.</div>
+      <div class="thoughts" id="thoughts" hidden></div>
+      <div class="step" id="st-check" hidden><div class="label">CHECK</div><div id="check"></div></div>
+      <div class="step" id="st-see" hidden><div class="label">I SEE</div><div id="see"></div></div>
+      <div class="step" id="st-new" hidden><div class="label">NEW</div><div id="new"></div></div>
+      <div class="step" id="st-think" hidden><div class="label">I THINK</div><div><div id="think"></div><div class="meta" id="place"></div></div></div>
+      <div class="step" id="st-opts" hidden><div class="label">OPTIONS</div><ul class="options" id="options"></ul></div>
+      <div class="step do" id="st-do" hidden><div class="label">I'LL DO</div><div>
+        <div class="action" id="action"></div>
+        <div class="meta" id="expected"></div>
+        <div class="conf"><div id="conf"></div></div>
+        <div class="tags" id="evidence"></div>
+      </div></div>
+      <div class="step" id="st-notes" hidden><div class="label">NOTES</div><div class="notes" id="notes"></div></div>
+    </div>
+  </section>
+
+  <section class="panel" id="journalPanel">
+    <h2>Journal <small>click a move to see its screen</small></h2>
+    <div class="scroll"><ul class="journal" id="journal"><li class="empty" style="cursor:default">No moves yet.</li></ul></div>
+  </section>
+
+  <section class="panel" id="sidePanel">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="map" aria-selected="true">World map</button>
+      <button role="tab" data-tab="people">Characters <span class="count" id="c-people">0</span></button>
+      <button role="tab" data-tab="places">Places <span class="count" id="c-places">0</span></button>
+      <button role="tab" data-tab="objects">Objects <span class="count" id="c-objects">0</span></button>
+      <button role="tab" data-tab="lessons">How it works <span class="count" id="c-lessons">0</span></button>
+    </nav>
+    <div class="tab" id="tab-map"><svg id="map"></svg><div class="legend meta">● place · <span class="who-dot"></span> character · <span class="thing-dot"></span> object (where last seen) · ☠ died here · dashed: not a compass move</div></div>
+    <div class="tab scroll" id="tab-people" hidden><div class="cards" id="people"><p class="empty">No characters seen yet.</p></div></div>
+    <div class="tab scroll" id="tab-places" hidden><div class="cards" id="places"><p class="empty">No places yet.</p></div></div>
+    <div class="tab scroll" id="tab-objects" hidden><div class="cards" id="objects"><p class="empty">No objects seen yet.</p></div></div>
+    <div class="tab scroll" id="tab-lessons" hidden>
+      <h4 class="sub">Learned while playing</h4>
+      <div id="gameplay"><p class="empty">Nothing yet.</p></div>
+      <h4 class="sub">Lessons from finished attempts</h4>
+      <ul class="lessons" id="lessons"><li class="empty">Written after each attempt.</li></ul>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const MARK = {works: "✔", fails: "✖", unsure: "?"};
+const VERDICT = {met: "✔", partly: "≈", not_met: "✖", "n/a": "·"};
+const PHASE = {thinking: "THINKING", explaining: "EXPLAINING", acting: "ACTING", loading: "LOADING GAME", reflecting: "REFLECTING", reviewing: "STEPPING BACK", idle: "IDLE"};
+let after = 0, interval = 120, phase = "idle", actAt = 0, currentPlace = "", map = {nodes: {}, edges: []};
+let viewing = null, frames = {}, journalEmpty = true, gameEmpty = true, lastMove = 0;
+let draft = "", thoughts = "", thinkingMove = 0;
+
+// ---------- the decision as it is written ----------
+// The model writes its decision as JSON, a few words at a time. Close whatever is still
+// open (a string, objects, arrays) and drop a half-written key, so it parses at every step.
+function partialJSON(src) {
+  src = lastObject(src);
+  const closers = [];
+  let inString = false, escaped = false;
+  for (const ch of src) {
+    if (inString) {
+      if (escaped) escaped = false; else if (ch === "\\") escaped = true; else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{") closers.push("}"); else if (ch === "[") closers.push("]");
+    else if (ch === "}" || ch === "]") closers.pop();
+  }
+  let text = src;
+  if (inString) text = (escaped ? text.slice(0, -1) : text) + '"';
+  const tail = closers.reverse().join("");
+  for (const candidate of [text,
+                           text.replace(/,?\s*"[^"]*"\s*:\s*[^,{\[\]}"]*$/, ""),   // key with a half-written number or word
+                           text.replace(/,?\s*"[^"]*"\s*:?\s*$/, ""),              // a key with no value yet
+                           text.replace(/,\s*$/, "")]) {
+    try { return JSON.parse(candidate + tail); } catch (e) {}
+  }
+  return null;
+}
+
+// If the model had to write its decision again (the first one was rejected), follow only the latest.
+function lastObject(src) {
+  let depth = 0, start = 0, inString = false, escaped = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inString) { if (escaped) escaped = false; else if (ch === "\\") escaped = true; else if (ch === '"') inString = false; continue; }
+    if (ch === '"') inString = true;
+    else if (ch === "{") { if (depth === 0) start = i; depth++; }
+    else if (ch === "}") depth = Math.max(0, depth - 1);
+  }
+  return src.slice(start);
+}
+
+// Which field the model is writing right now: the last key whose string is still open.
+function growingField(src) {
+  const m = lastObject(src).match(/"(\w+)"\s*:\s*"(?:[^"\\]|\\.)*$/);
+  return m ? m[1] : null;
+}
+
+const label = a => a.kind === "type" ? `"${a.text}"` : a.kind === "key" ? `press ${a.text}` : `wait ${a.text}s`;
+
+// ---------- phase, countdown and the emulator picture ----------
+function setPhase(p, ev = {}) {
+  phase = p;
+  const chip = $("phase"); chip.className = "chip " + (PHASE[p] ? p : "idle"); chip.textContent = PHASE[p] || p.toUpperCase();
+  actAt = p === "explaining" && ev.act_at ? ev.act_at : 0;
+  if (p === "thinking") {
+    draft = ""; thoughts = ""; thinkingMove = ev.move || thinkingMove;
+    render({}, null);
+    $("waiting").hidden = false; $("waiting").innerHTML = 'Looking at the screen and thinking<span class="cursor"></span>';
+    $("agentMeta").textContent = `move ${thinkingMove} · thinking`;
+  }
+  updateBadge();
+}
+setInterval(() => {
+  const left = actAt ? Math.max(0, actAt - Date.now() / 1000) : 0;
+  $("countdown").style.width = actAt ? `${100 - 100 * left / interval}%` : (phase === "acting" ? "100%" : "0");
+  $("countdownText").textContent = actAt ? `acts in ${Math.ceil(left)}s` : "";
+}, 1000);
+
+function updateBadge() {
+  const b = $("badge");
+  if (viewing) { b.className = "badge past"; b.textContent = `MOVE ${viewing} · BACK TO LIVE`; }
+  else if (phase === "thinking" || phase === "explaining") { b.className = "badge frozen"; b.textContent = "GAME FROZEN · AGENT THINKING"; }
+  else { b.className = "badge live"; b.textContent = "LIVE"; }
+}
+// The live picture: fetch each new frame as soon as the server has it and paint it on a
+// canvas. A frame is drawn only once it has decoded, so the picture never blanks.
+const ctx = $("screen").getContext("2d");
+let frameVersion = -1;
+async function draw(url) {
+  const r = await fetch(url, {cache: "no-store"});
+  if (r.status === 200) ctx.drawImage(await createImageBitmap(await r.blob()), 0, 0);
+}
+async function liveLoop() {
+  for (;;) {
+    try {
+      const r = await fetch(`/api/screen.next?after=${frameVersion}`, {cache: "no-store"});
+      if (r.status === 200) {
+        const version = Number(r.headers.get("X-Frame-Version"));
+        const bitmap = await createImageBitmap(await r.blob());
+        frameVersion = version;
+        if (!viewing) ctx.drawImage(bitmap, 0, 0);
+      }
+    } catch (e) { await new Promise(res => setTimeout(res, 1000)); }
+  }
+}
+$("badge").onclick = () => {
+  if (!viewing) return;
+  viewing = null;
+  document.querySelectorAll(".journal li.sel").forEach(l => l.classList.remove("sel"));
+  updateBadge();
+  draw("/api/live.png");          // the latest frame now, even if the game is frozen
+};
+liveLoop();
+
+// ---------- the agent's decision, while it is written and when it is done ----------
+const CURSOR = '<span class="cursor"></span>';
+const actionLabel = a => a && a.kind ? label({kind: a.kind, text: a.text ?? ""}) : "";
+
+// Show whatever there is of decision ``d``; ``growing`` names the field still being written.
+function render(d, growing) {
+  const show = (id, has, isGrowing) => { $(id).hidden = !has; $(id).classList.toggle("writing", !!isGrowing); };
+  const text = (id, value, field) => { $(id).innerHTML = esc(value || "") + (growing === field ? CURSOR : ""); };
+
+  show("st-check", d.previous_verdict || d.previous_note, growing === "previous_note");
+  if (d.previous_verdict || d.previous_note) {
+    const v = d.previous_verdict || "n/a", cls = v === "n/a" ? "na" : v;
+    $("check").innerHTML = (d.previous_verdict ? `<span class="verdict ${cls}">${VERDICT[v] || ""} ${esc(v.replace("_", " ").toUpperCase())}</span>` : "") +
+                           esc(d.previous_note || "") + (growing === "previous_note" ? CURSOR : "");
+  }
+  show("st-see", d.observation, growing === "observation"); text("see", d.observation, "observation");
+  show("st-new", d.new_information, growing === "new_information"); text("new", d.new_information, "new_information");
+  show("st-think", d.interpretation, growing === "interpretation" || growing === "place");
+  text("think", d.interpretation, "interpretation");
+  $("place").innerHTML = d.place ? `place: ${esc(d.place)}${growing === "place" ? CURSOR : ""}` : "";
+
+  const options = (d.options || []).filter(o => o && (o.action || o.why));
+  const writingOptions = Array.isArray(d.options) && d.chosen === undefined;
+  show("st-opts", options.length, writingOptions);
+  $("options").innerHTML = options.map((o, i) => {
+    const last = writingOptions && i === options.length - 1;
+    return `<li class="${i === d.chosen ? "chosen" : ""}"><b>${esc(actionLabel(o.action))}</b>` +
+      (o.risk ? `<span class="risk ${esc(o.risk)}">${esc(o.risk)}</span>` : "") +
+      (o.why ? `<br>${esc(o.why)}` : "") + (o.expected ? `<br><span class="meta">expect: ${esc(o.expected)}</span>` : "") +
+      (last && ["why", "expected", "text"].includes(growing) ? CURSOR : "") + "</li>";
+  }).join("");
+
+  const decided = d.action && d.action.kind;
+  show("st-do", decided, decided && !d.confidence);
+  if (decided) {
+    $("action").textContent = "▶ " + actionLabel(d.action);
+    $("expected").innerHTML = d.expected ? "I expect: " + esc(d.expected) + (growing === "expected" && !writingOptions ? CURSOR : "") : "";
+    $("conf").parentElement.hidden = d.confidence === undefined;
+    $("conf").style.width = `${Math.round((d.confidence || 0) * 100)}%`;
+    const tags = [];
+    if (d.confidence !== undefined) tags.push(`${Math.round(d.confidence * 100)}% sure`);
+    if (d.mode) tags.push(d.mode);
+    $("evidence").innerHTML = [...tags, ...(d.evidence || [])].map(t => `<span>${esc(t)}</span>`).join("");
+  }
+  show("st-notes", d.notes, growing === "notes"); text("notes", d.notes, "notes");
+
+  $("thoughts").hidden = !thoughts;
+  $("thoughts").textContent = thoughts;
+  $("waiting").hidden = true;
+  if (growing) {        // keep the part being written in view
+    const step = document.querySelector(".step.writing");
+    if (step) step.scrollIntoView({block: "nearest"});
+  }
+}
+
+function renderDraft() {
+  const d = partialJSON(draft);
+  if (d) render(d, growingField(draft));
+}
+
+function showDecision(d, move, seconds) {
+  render(d, null);
+  $("agentMeta").textContent = `move ${move} · ${d.place} · decided in ${Math.round(seconds || 0)}s`;
+  currentPlace = d.place;
+}
+
+// ---------- the game's text and the journal ----------
+function gameLog(html) {
+  const log = $("gamelog");
+  if (gameEmpty) { log.innerHTML = ""; gameEmpty = false; }
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.insertAdjacentHTML("beforeend", html);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function journalAdd(html) {
+  const j = $("journal"), box = j.parentElement;
+  if (journalEmpty) { j.innerHTML = ""; journalEmpty = false; }
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  j.insertAdjacentHTML("beforeend", html);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+// How long it has gone without progress (a new place, character or object), and the stuck review's plan.
+let stallLimit = 50;
+function showStall(n, limit = stallLimit, plan) {
+  stallLimit = limit;
+  const box = $("stall");
+  if (plan !== undefined) $("stallPlan").textContent = plan ? "plan: " + plan : "";
+  if (!n) { box.className = "stall"; $("stallPlan").textContent = ""; return; }
+  box.className = "stall on" + (n >= limit * 0.8 ? " critical" : n >= 10 ? " high" : "");
+  $("stallText").textContent = `no progress for ${n} move${n === 1 ? "" : "s"} · gives up at ${limit}`;
+  $("stallBar").style.width = `${Math.min(100, 100 * n / limit)}%`;
+}
+
+function journalReview(ev) {
+  const title = ev.verdict === "limit" ? "STUCK: GIVING UP" : ev.verdict === "resign" ? "STEPPED BACK: RESIGNS"
+    : "STEPPED BACK: KEEPS TRYING";
+  const body = ev.verdict === "limit" ? esc(ev.assessment) :
+    `${esc(ev.assessment)}${ev.plan ? `<br><i>${ev.verdict === "resign" ? "why" : "plan"}: ${esc(ev.plan)}</i>` : ""}`;
+  journalAdd(`<li class="review ${esc(ev.verdict)}"><span><b>${title}</b> · after ${ev.stalled} moves without progress<br>${body}</span></li>`);
+}
+
+function journalMove(ev, d) {
+  const verdict = d.previous_verdict || (d.previous_check ? d.previous_check.verdict : "n/a");
+  journalAdd(`<li data-move="${ev.move}" title="${esc(d.interpretation)}"><span class="n">${ev.move}</span>` +
+    `<span class="v">${VERDICT[verdict] || "·"}</span><span><span class="what">${esc(label(d.action))}</span>` +
+    `<span class="where">${esc(d.place)} · ${esc(d.mode)}</span></span></li>`);
+}
+
+$("journal").addEventListener("click", e => {
+  const li = e.target.closest("li[data-move]"); if (!li) return;
+  const f = frames[li.dataset.move]; if (!f) return;
+  document.querySelectorAll(".journal li.sel").forEach(l => l.classList.remove("sel"));
+  li.classList.add("sel"); viewing = li.dataset.move;
+  draw("/api/frame/" + f); updateBadge();
+});
+
+// ---------- stats, lessons, map ----------
+function showStats(s) {
+  if (!s) return;
+  $("s-attempts").textContent = s.attempts; $("s-best").textContent = s.best_moves;
+  $("s-deaths").textContent = s.outcomes["fail:death"] || 0; $("s-places").textContent = s.places;
+  $("s-lessons").textContent = s.lessons;
+  $("s-people").textContent = s.characters || 0;
+  $("s-cost").textContent = "$" + (s.cost_today || 0).toFixed(2);
+  const p = s.predictions || {}, n = (p.met || 0) + (p.partly || 0) + (p.not_met || 0);
+  $("s-pred").textContent = n ? `${Math.round(100 * ((p.met || 0) + 0.5 * (p.partly || 0)) / n)}%` : "–";
+}
+
+function showLessons(lessons, experiments) {
+  if (!lessons || !lessons.length) return;
+  $("lessons").innerHTML = lessons.map(l => `<li><span class="k ${esc(l.kind)}">${MARK[l.kind] || "?"}</span><span>${esc(l.text)}</span>` +
+    `<span class="c">${Math.round(l.confidence * 100)}%</span></li>`).join("") +
+    (experiments && experiments.length ? `<li style="margin-top:6px" class="meta">Next time, test: ${experiments.map(e => esc(e.text)).join(" · ")}</li>` : "");
+}
+
+const DIRS = {n: [0, -1], north: [0, -1], s: [0, 1], south: [0, 1], e: [1, 0], east: [1, 0], w: [-1, 0], west: [-1, 0],
+  ne: [1, -1], northeast: [1, -1], nw: [-1, -1], northwest: [-1, -1], se: [1, 1], southeast: [1, 1], sw: [-1, 1], southwest: [-1, 1],
+  u: [.5, -.5], up: [.5, -.5], d: [-.5, .5], down: [-.5, .5]};
+function dirOf(command) {
+  for (const w of command.toLowerCase().replace(/["]/g, "").split(/\s+/).reverse()) if (DIRS[w]) return DIRS[w];
+  return null;
+}
+function drawMap() {
+  const svg = $("map"), names = Object.keys(map.nodes);
+  const W = svg.clientWidth || 400, H = svg.clientHeight || 220;
+  if (!names.length) { svg.innerHTML = `<text x="14" y="20" style="fill:var(--faint)">No places yet.</text>`; return; }
+  const pos = {}, used = new Set(), key = p => `${p[0]},${p[1]}`;
+  const put = (n, p) => { while (used.has(key(p))) p = [p[0] + 1, p[1] + 1]; pos[n] = p; used.add(key(p)); };
+  const start = names.reduce((a, b) => map.nodes[a].first_seen <= map.nodes[b].first_seen ? a : b);
+  put(start, [0, 0]);
+  const queue = [start];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const e of map.edges) if (e.from === cur && e.to in map.nodes && !(e.to in pos)) {
+      const d = dirOf(e.command) || [1, 1]; put(e.to, [pos[cur][0] + d[0], pos[cur][1] + d[1]]); queue.push(e.to);
+    }
+  }
+  let spare = 0; for (const n of names) if (!(n in pos)) put(n, [spare++, 3]);
+  const xs = names.map(n => pos[n][0]), ys = names.map(n => pos[n][1]);
+  const minX = Math.min(...xs), minY = Math.min(...ys), spanX = Math.max(1, Math.max(...xs) - minX), spanY = Math.max(1, Math.max(...ys) - minY);
+  const sx = Math.min(120, (W - 110) / spanX), sy = Math.min(70, (H - 50) / spanY);
+  const xy = n => [55 + (pos[n][0] - minX) * sx, 22 + (pos[n][1] - minY) * sy];
+  let out = "";
+  for (const e of map.edges) if (e.from in pos && e.to in pos) {
+    const [x1, y1] = xy(e.from), [x2, y2] = xy(e.to);
+    out += `<line class="edge" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"${dirOf(e.command) ? "" : ' stroke-dasharray="4 3"'}><title>${esc(e.command)}</title></line>`;
+  }
+  for (const n of names) {
+    const [x, y] = xy(n), node = map.nodes[n];
+    out += `<circle class="node${n === currentPlace ? " here" : ""}${node.deaths ? " death" : ""}" cx="${x}" cy="${y}" r="7"><title>${esc(n)}: ${esc(node.description)} (visited ${node.visits}x)</title></circle>` +
+           `<text x="${x}" y="${y + 19}" text-anchor="middle">${esc(n.length > 20 ? n.slice(0, 19) + "…" : n)}${node.deaths ? " ☠" : ""}</text>`;
+  }
+  // Characters (dots, named) and objects (squares) at the place each was last seen.
+  const around = {};
+  for (const [book, cls] of [["characters", "who"], ["objects", "thing"]])
+    for (const [name, e] of Object.entries(entities[book] || {})) {
+      const at = e.last_seen && e.last_seen.place;
+      if (!(at in pos)) continue;
+      const i = around[at] = (around[at] || 0) + 1;
+      const [x, y] = xy(at), angle = -Math.PI / 2 + (i - 1) * 0.8;
+      const cx = x + 15 * Math.cos(angle) + 6, cy = y + 13 * Math.sin(angle);
+      const tip = `<title>${esc(name)}: ${esc(e.last_seen.doing)}</title>`;
+      out += cls === "who"
+        ? `<circle class="who" cx="${cx}" cy="${cy}" r="4.5">${tip}</circle>` +
+          `<text class="who-label" x="${cx + 7}" y="${cy + 3}">${esc(name.length > 12 ? name.slice(0, 11) + "…" : name)}</text>`
+        : `<rect class="thing" x="${cx - 3.5}" y="${cy - 3.5}" width="7" height="7">${tip}</rect>`;
+    }
+  svg.innerHTML = out;
+}
+
+// ---------- characters and places: what it has seen and learned ----------
+let entities = {characters: {}, places: {}}, freshFacts = new Set(), freshPeople = new Set();
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll("#sidePanel .tab").forEach(t => t.hidden = t.id !== "tab-" + b.dataset.tab);
+  b.classList.remove("flash");
+  if (b.dataset.tab === "map") drawMap();
+});
+function flashTab(name) {
+  const b = document.querySelector(`.tabs button[data-tab="${name}"]`);
+  if (b.getAttribute("aria-selected") !== "true") b.classList.add("flash");
+}
+
+const factList = facts => facts && facts.length ? "<ul>" + facts.slice().reverse().map(f =>
+  `<li class="${freshFacts.has(f.text) ? "fresh" : ""}" title="attempt ${esc(f.session.slice(-4).replace(/^0+/, ""))}, move ${f.move}">${esc(f.text)}</li>`).join("") + "</ul>" : "";
+
+// Characters and objects share a card: where last seen, doing what (or in what state), what is known.
+function sightingCards(book, boxId, countId, fresh) {
+  const entries = Object.entries(entities[book] || {});
+  $(countId).textContent = entries.length;
+  if (!entries.length) return;
+  entries.sort((a, b) => ((b[1].last_seen || {}).at || 0) - ((a[1].last_seen || {}).at || 0));
+  $(boxId).innerHTML = entries.map(([name, e]) => {
+    const last = e.last_seen;
+    const trail = Object.entries(e.places || {}).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${esc(p)} ×${n}`).join(" · ");
+    return `<div class="card${fresh.has(name) ? " new" : ""}"><h3>${esc(name)}<small>seen ${e.sightings || 0}×</small></h3>` +
+      (last ? `<div class="seen">last seen at <b>${esc(last.place)}</b> · move ${last.move}${last.doing ? "<br>" + esc(last.doing) : ""}</div>`
+            : `<div class="seen">only heard about</div>`) +
+      factList(e.facts) + (trail ? `<div class="trail">seen at: ${trail}</div>` : "") + "</div>";
+  }).join("");
+}
+let freshObjects = new Set();
+function showPeople() { sightingCards("characters", "people", "c-people", freshPeople); }
+function showObjects() { sightingCards("objects", "objects", "c-objects", freshObjects); }
+function showGameplay() {
+  const facts = entities.gameplay || [];
+  if (facts.length) $("gameplay").innerHTML = "<ul>" + facts.slice().reverse().map(f =>
+    `<li class="${freshFacts.has(f.text) ? "fresh" : ""}">${esc(f.text)}</li>`).join("") + "</ul>";
+}
+
+function showPlaces() {
+  const names = [...new Set([...Object.keys(map.nodes), ...Object.keys(entities.places || {})])];
+  $("c-places").textContent = names.length;
+  if (!names.length) return;
+  const whoHere = {};
+  for (const [name, who] of Object.entries(entities.characters || {}))
+    if (who.last_seen) (whoHere[who.last_seen.place] = whoHere[who.last_seen.place] || []).push(name);
+  names.sort((a, b) => (a === currentPlace ? -1 : b === currentPlace ? 1 : ((map.nodes[b] || {}).visits || 0) - ((map.nodes[a] || {}).visits || 0)));
+  $("places").innerHTML = names.map(name => {
+    const node = map.nodes[name] || {}, facts = (entities.places[name] || {}).facts;
+    const exits = map.edges.filter(e => e.from === name).map(e => `${esc(e.command)} → ${esc(e.to)}`).join(" · ");
+    return `<div class="card${name === currentPlace ? " here" : ""}"><h3>${esc(name)}${node.deaths ? " ☠" : ""}<small>visited ${node.visits || 0}×</small></h3>` +
+      (node.description ? `<div class="seen">${esc(node.description)}</div>` : "") +
+      (whoHere[name] ? `<div class="seen">last seen here: <b>${whoHere[name].map(esc).join(", ")}</b></div>` : "") +
+      factList(facts) + (exits ? `<div class="trail">exits tried: ${exits}</div>` : "") + "</div>";
+  }).join("");
+}
+
+async function refreshState() {
+  try {
+    const st = await (await fetch("/api/state")).json();
+    interval = st.interval; map = st.map; entities = st.entities || entities;
+    showStats(st.stats); showLessons(st.lessons, st.experiments);
+    $("c-lessons").textContent = st.lessons.length + (entities.gameplay || []).length;
+    showPeople(); showPlaces(); showObjects(); showGameplay();
+    drawMap();
+  } catch (e) {}
+}
+
+// ---------- events ----------
+function handle(ev, live) {
+  switch (ev.kind) {
+    case "attempt_start":
+      $("attempt").textContent = ev.attempt; showStall(0, 50);
+      journalAdd(`<li class="attempt">ATTEMPT ${ev.attempt}</li>`);
+      gameLog(`<div class="cmd" style="color:var(--cyan)">── attempt ${ev.attempt} begins ──</div>`);
+      break;
+    case "phase": setPhase(ev.phase, ev); break;
+    case "frame":
+      frames[ev.move] = ev.file; lastMove = ev.move;
+      $("move").textContent = ev.move;
+      if (ev.move === 1 && ev.lines.length) gameLog(ev.lines.map(l => `<div class="line">${esc(l)}</div>`).join(""));
+      break;
+    case "glyphs": break;
+    case "thinking": thoughts += ev.text; if (live) renderDraft(); break;
+    case "draft": draft += ev.text; if (live) renderDraft(); break;
+    case "decision":
+      showDecision(ev.decision, ev.move, ev.seconds); journalMove(ev, ev.decision); showStats(ev.stats);
+      if (ev.stall_limit) showStall(ev.stalled, ev.stall_limit);
+      if (live) refreshState(); break;
+    case "review":
+      journalReview(ev);
+      if (ev.verdict === "continue") showStall(ev.stalled, stallLimit, ev.plan);
+      gameLog(`<div class="cmd" style="color:#f29a4a">── stepping back after ${ev.stalled} moves without progress: ${
+        ev.verdict === "continue" ? "keeps trying" : ev.verdict === "resign" ? "resigns" : "gives up"} ──</div>`);
+      break;
+    case "action":
+      gameLog(`<div class="cmd">&gt; ${esc(label(ev.action))}<small>move ${ev.move}${ev.error ? " · " + esc(ev.error) : ""}</small></div>`);
+      break;
+    case "entities":
+      if (live) {
+        freshFacts = new Set((ev.learned || []).map(f => f.fact));
+        freshPeople = new Set(ev.seen || []);
+        freshObjects = new Set(ev.objects || []);
+        const about = kind => (ev.learned || []).some(f => f.about === kind);
+        if (about("character") || (ev.seen || []).length) flashTab("people");
+        if (about("place")) flashTab("places");
+        if (about("object") || (ev.objects || []).length) flashTab("objects");
+        if (about("gameplay")) flashTab("lessons");
+        refreshState();
+      }
+      break;
+    case "kb": showLessons(ev.lessons); flashTab("lessons"); if (live) refreshState(); break;
+    case "outcome":
+      gameLog(`<div class="cmd" style="color:var(--magenta)">── attempt ${ev.attempt}: ${esc(ev.outcome)} after ${ev.moves} moves ──</div>`);
+      if (live) refreshState(); break;
+    case "error": gameLog(`<div class="cmd" style="color:var(--red)">! ${esc(ev.text)}</div>`); break;
+  }
+  // The text that is new after an action arrives with the next frame.
+  if (ev.kind === "frame" && ev.move > 1) {
+    gameLog(ev.new.length ? ev.new.map(l => `<div class="line${live ? " fresh" : ""}">${esc(l)}</div>`).join("") : `<div class="none">(no new text)</div>`);
+    if (live) setTimeout(() => document.querySelectorAll(".gamelog .fresh").forEach(e => e.classList.remove("fresh")), 8000);
+  }
+}
+
+async function poll() {
+  for (;;) {
+    try {
+      const events = await (await fetch(`/api/events?after=${after}`)).json();
+      for (const ev of events) { after = ev.n + 1; handle(ev, Date.now() / 1000 - ev.at < 15); }
+    } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+
+window.addEventListener("resize", drawMap);
+refreshState().then(poll);
+</script>
+</body>
+</html>

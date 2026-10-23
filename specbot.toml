@@ -1,0 +1,14 @@
+# specbot configuration for Fuse on this machine, 48K mode for The Hobbit.
+backend = "window"
+rom = "C:/Program Files (x86)/Fuse/roms/48.rom"
+
+[window]
+window_title = "Fuse"
+window_class = "Fuse"
+capture = "printwindow"     # works even when the Fuse window is covered
+crop = [0, 0, 0, 29]        # Fuse status bar
+native_size = [320, 240]
+
+[launch]
+path = "C:/Program Files (x86)/Fuse/fuse.exe"
+args = ["--machine", "48", "--graphics-filter", "2x"]

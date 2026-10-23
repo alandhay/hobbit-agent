@@ -1,0 +1,27 @@
+# hobbit-agent configuration (local Windows run).
+
+tape = "data/game/hobbit.tzx"      # your own copy of the game; restarts Fuse with it for each attempt
+specbot_config = "specbot.toml"    # Fuse window, capture and launch settings (48K)
+
+[pace]
+move_interval_seconds = 120        # one move every 2 minutes
+clock = "paused"                   # the emulator is frozen while the agent thinks
+
+[brain]
+backend = "agent_sdk"              # uses the Claude Code login on this machine (no API key)
+model = "claude-opus-5-5"
+effort = "medium"
+side_model = "claude-haiku-5-5"    # glyph labelling checks, reflection summaries
+
+[limits]
+max_moves_per_attempt = 300
+max_stale_moves = 50               # this many moves without progress (no new place, character or object) -> fail:stuck
+stuck_review_every = 10            # every 10 such moves, step back: keep trying (with a new plan) or resign
+daily_cost_cap_usd = 25.0          # notional cost reported by the SDK; ends the run when reached
+
+[learning]
+allow_human_hints = false          # review notes stay out of the agent's knowledge unless true
+
+[server]
+host = "127.0.0.1"
+port = 8800
