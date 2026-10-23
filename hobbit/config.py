@@ -25,6 +25,8 @@ class Config:
     stuck_review_every: int = 10
     daily_cost_cap_usd: float = 25.0
     allow_human_hints: bool = False
+    awake_minutes: float = 0.0                 # supervised: sleep this long after starting or the last reset (0 = never)
+    start_asleep: bool = False                 # supervised: wait for the operator to wake it before playing
     host: str = "127.0.0.1"
     port: int = 8800
     data: Path = ROOT / "data"
@@ -37,6 +39,7 @@ def load_config(path: str | Path | None = None) -> Config:
     raw = tomllib.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     pace, brain, limits = raw.get("pace", {}), raw.get("brain", {}), raw.get("limits", {})
     learning, server = raw.get("learning", {}), raw.get("server", {})
+    supervision = raw.get("supervision", {})
     cfg = Config()
     if "tape" in raw:
         cfg.tape = (ROOT / raw["tape"]).resolve()
@@ -58,6 +61,8 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg.stuck_review_every = int(limits.get("stuck_review_every", cfg.stuck_review_every))
     cfg.daily_cost_cap_usd = float(limits.get("daily_cost_cap_usd", cfg.daily_cost_cap_usd))
     cfg.allow_human_hints = bool(learning.get("allow_human_hints", cfg.allow_human_hints))
+    cfg.awake_minutes = float(supervision.get("awake_minutes", cfg.awake_minutes))
+    cfg.start_asleep = bool(supervision.get("start_asleep", cfg.start_asleep))
     cfg.host = server.get("host", cfg.host)
     cfg.port = int(server.get("port", cfg.port))
     if cfg.clock not in ("paused", "live"):

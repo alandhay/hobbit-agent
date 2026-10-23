@@ -7,14 +7,19 @@ GET /api/screen.next?after=V  the next emulator frame newer than version V (wait
 GET /api/screen.stream   the same frames as one multipart stream (for other viewers; Chrome paints it unreliably)
 GET /api/live.png        the latest frame
 GET /api/frame/<session>/<name>  a frame saved in a session folder
+POST /api/control        the operator's buttons: {"action": "reset" | "sleep" | "wake"}, with the
+                         operator password (HOBBIT_OPERATOR_PASSWORD) as a Bearer token when it is set
 """
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import re
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -27,6 +32,10 @@ BOUNDARY = "hobbitframe"
 
 
 def serve(host: str, port: int, events: EventLog, store: Store, rig: Rig, runner) -> ThreadingHTTPServer:
+    # Without a password (a local run) anyone who can reach the page may press the buttons; on the
+    # server the page is public behind HTTPS, so the deploy always sets one.
+    password = os.environ.get("HOBBIT_OPERATOR_PASSWORD", "")
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):     # keep the console for the run's own log
             pass
@@ -100,6 +109,20 @@ def serve(host: str, port: int, events: EventLog, store: Store, rig: Rig, runner
                 if path.is_file():
                     return self._send(200, path.read_bytes(), "image/png")
             self._send(404, b"not found", "text/plain")
+
+        def do_POST(self) -> None:
+            if urlparse(self.path).path != "/api/control":
+                return self._send(404, b"not found", "text/plain")
+            given = self.headers.get("Authorization", "").removeprefix("Bearer ")
+            if password and not hmac.compare_digest(given.encode(), password.encode()):
+                time.sleep(1.0)                # slows down guessing
+                return self._send(401, b'{"error": "wrong operator password"}', "application/json")
+            try:
+                length = min(int(self.headers.get("Content-Length", "0")), 4096)
+                action = json.loads(self.rfile.read(length) or b"{}").get("action", "")
+                return self._json(runner.control(action))
+            except (ValueError, AttributeError) as exc:
+                return self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     class Server(ThreadingHTTPServer):
         def handle_error(self, request, client_address) -> None:

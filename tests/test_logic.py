@@ -135,3 +135,41 @@ def test_moves_that_need_judgment_go_to_the_main_model():
     assert escalate_after(_decision(game_state="game_over"), found, 0.6) == ["game state: game_over"]
     assert escalate_after(_decision(confidence=0.4), found, 0.6) == ["low confidence (0.40)"]
     assert escalate_after(_decision(options=[{"risk": "high"}]), found, 0.6) == ["a high-risk move"]
+
+
+class _FakeRig:
+    def __init__(self):
+        self.paused = False
+
+    def pause(self):
+        self.paused = True
+
+
+def _runner(**cfg):
+    from hobbit.archive import EventLog
+    from hobbit.config import Config
+    from hobbit.session import Runner
+    return Runner(Config(**cfg), _FakeRig(), None, None, None, EventLog())
+
+
+def test_supervision_counts_down_and_operator_can_reset_sleep_and_wake():
+    import threading
+    import time
+    r = _runner(awake_minutes=60)
+    assert not r.asleep and 3590 < r.sleep_at - time.time() <= 3600
+    r.sleep_at = time.time() + 5
+    r.control("reset")
+    assert r.sleep_at - time.time() > 3590
+    r.control("sleep")
+    woke = threading.Timer(0.3, lambda: r.control("wake"))
+    woke.start()
+    r._doze_if_due()                       # freezes the game, waits for the wake
+    assert r.rig.paused and not r.asleep and r.sleep_at - time.time() > 3590
+    assert r.status["phase"] != "asleep"
+
+
+def test_unsupervised_runs_never_sleep_and_start_asleep_waits():
+    r = _runner(awake_minutes=0)
+    assert r.sleep_at is None
+    r._doze_if_due()                       # returns at once
+    assert _runner(awake_minutes=60, start_asleep=True).asleep

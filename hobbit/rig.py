@@ -1,9 +1,11 @@
 """The emulator rig: Fuse in 48K mode driven through specbot.
 
-Locally this is specbot's Win32 window backend: screenshots with PrintWindow (the
+On Windows this is specbot's Win32 window backend: screenshots with PrintWindow (the
 window may be covered) and key presses posted to Fuse's window as messages, so
-Fuse never needs the keyboard focus and can stay behind other windows. Between
-moves the Fuse process is suspended, so the game is frozen while the agent thinks.
+Fuse never needs the keyboard focus and can stay behind other windows. On Linux (the
+server) it is specbot's X11 backend: fuse-sdl on a private virtual display, with its
+sound tapped for the broadcast. Between moves the Fuse process is suspended
+(NtSuspendProcess, or SIGSTOP on Linux), so the game is frozen while the agent thinks.
 
 A suspended window cannot paint, and PrintWindow waits for it to, so nothing here
 captures while the emulator is paused: the last frame is kept instead.
@@ -15,6 +17,11 @@ import atexit
 import ctypes
 import io
 import logging
+import os
+import shlex
+import signal
+import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -37,6 +44,10 @@ SETTLE_MAX_S = 20.0
 PROCESS_SUSPEND_RESUME = 0x0800
 ECHO_ATTEMPTS = 3
 ENTER_HOLD_FRAMES = 10       # the game only acts on an ENTER held this long (3 frames gives a new line but no action)
+WINDOWS = sys.platform == "win32"
+# Linux: the emulator command and the ROM the input line's font is read from (Debian/Ubuntu packages).
+LINUX_FUSE = shlex.split(os.environ.get("HOBBIT_FUSE", "fuse-sdl --machine 48"))
+LINUX_ROM = os.environ.get("HOBBIT_ROM", "/usr/share/spectrum-roms/48.rom")
 
 # Keys the agent may press on their own (besides typing a line).
 SINGLE_KEYS = {"ENTER", "SPACE", "DELETE", "BREAK", *"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"}
@@ -122,7 +133,15 @@ class Rig:
     def __init__(self, tape: Path, specbot_config: Path, *, paused_clock: bool = True) -> None:
         self.tape = tape
         self.paused_clock = paused_clock
-        self.emu = BackgroundWindowEmulator(load_config(str(specbot_config)))
+        if WINDOWS:
+            self.emu = BackgroundWindowEmulator(load_config(str(specbot_config)))
+        else:
+            from specbot.config import LaunchConfig
+            from specbot.x11_backend import X11Emulator
+
+            # The sound is tapped for the broadcast; SDL writes it to a file in a folder Fuse can write to.
+            self.emu = X11Emulator(LaunchConfig(LINUX_FUSE[0], LINUX_FUSE[1:]), rom_path=LINUX_ROM, sound=True,
+                                   scratch=tempfile.mkdtemp(prefix="hobbit-fuse-"))
         self._lock = threading.RLock()
         self._suspended = False
         self._seq = 0
@@ -136,6 +155,12 @@ class Rig:
         import win32process
 
         return win32process.GetWindowThreadProcessId(self.emu.hwnd)[1]
+
+    def _signal(self, sig: int) -> None:
+        pid = self.emu.pid
+        if pid is None:
+            raise RigError("the emulator is not running")
+        os.kill(pid, sig)
 
     def _suspend_call(self, name: str) -> None:
         ntdll = ctypes.WinDLL("ntdll")
@@ -153,20 +178,33 @@ class Rig:
     def pause(self) -> None:
         with self._lock:
             if self.paused_clock and not self._suspended:
-                self._suspend_call("NtSuspendProcess")
+                if WINDOWS:
+                    self._suspend_call("NtSuspendProcess")
+                else:
+                    self._signal(signal.SIGSTOP)
                 self._suspended = True
 
     def resume(self) -> None:
         with self._lock:
             if self._suspended:
                 try:
-                    self._suspend_call("NtResumeProcess")
+                    if WINDOWS:
+                        self._suspend_call("NtResumeProcess")
+                    else:
+                        self._signal(signal.SIGCONT)
+                except ProcessLookupError:
+                    pass                        # it has gone; nothing to resume
                 finally:
                     self._suspended = False
 
     @property
     def paused(self) -> bool:
         return self._suspended
+
+    @property
+    def audio(self):
+        """The emulator's sound tap (Linux only): 48 kHz, 16-bit stereo samples, nothing while paused."""
+        return getattr(self.emu, "audio", None)
 
     # -- seeing ----------------------------------------------------------
 

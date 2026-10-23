@@ -23,6 +23,11 @@ daily_cost_cap_usd = 25.0          # notional cost reported by the SDK; ends the
 [learning]
 allow_human_hints = false          # review notes stay out of the agent's knowledge unless true
 
+[supervision]
+awake_minutes = 60                 # goes to sleep (game frozen, no model calls) an hour after starting or the
+                                   # last reset; the dashboard counts down and the operator can reset, sleep or wake
+start_asleep = false               # true: wait for the operator to press Wake before playing
+
 [server]
 host = "127.0.0.1"
 port = 8800

@@ -1,4 +1,5 @@
 """python -m hobbit run [--attempts N] [--interval SECONDS]   play, with the dashboard on http://127.0.0.1:8800
+python -m hobbit run --stream --no-browser               on the server: also broadcast the dashboard (YOUTUBE_STREAM_KEY)
 python -m hobbit check                                     load the game, read the screen, one model call; no keys pressed
 """
 
@@ -28,6 +29,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--interval", type=float, help="seconds per move (default from hobbit.toml)")
     run.add_argument("--max-moves", type=int, help="moves per attempt (default from hobbit.toml)")
     run.add_argument("--no-browser", action="store_true", help="don't open the dashboard")
+    run.add_argument("--stream", action="store_true",
+                     help="broadcast the dashboard and the game's sound (Linux; YOUTUBE_STREAM_KEY or HOBBIT_STREAM_URL)")
+    run.add_argument("--start-asleep", action="store_true", help="wait for the operator to press Wake before playing")
     sub.add_parser("check", help="load the game, read the screen and make one model call, without acting")
     args = parser.parse_args(argv)
 
@@ -37,6 +41,16 @@ def main(argv: list[str] | None = None) -> int:
         cfg.move_interval_seconds = args.interval
     if getattr(args, "max_moves", None):
         cfg.max_moves_per_attempt = args.max_moves
+    if getattr(args, "start_asleep", False):
+        cfg.start_asleep = True
+    target = None
+    if getattr(args, "stream", False):
+        from .broadcast import stream_target
+
+        target = stream_target()
+        if target is None:
+            print("hobbit: --stream needs YOUTUBE_STREAM_KEY (or HOBBIT_STREAM_URL) in the environment", file=sys.stderr)
+            return 2
     if not cfg.tape.is_file():
         print(f"hobbit: the game tape was not found at {cfg.tape}", file=sys.stderr)
         return 2
@@ -57,10 +71,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dashboard: {url}")
         if not args.no_browser:
             webbrowser.open(url)
+        broadcast = None
+        if target:
+            from .broadcast import Broadcast
+
+            broadcast = Broadcast(f"http://127.0.0.1:{cfg.port}/?broadcast", target, lambda: rig.audio,
+                                  cfg.data.parent / "logs")
+            broadcast.start()
         try:
             runner.run(args.attempts)
         except KeyboardInterrupt:
             pass
+        finally:
+            if broadcast:
+                broadcast.stop()
         server.shutdown()
         return 0
     finally:

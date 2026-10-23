@@ -33,6 +33,24 @@
   .chip.acting { background: var(--yellow); color: #231c00; } .chip.loading, .chip.reflecting { background: var(--cyan); color: #00262a; }
   .chip.idle { background: var(--line); color: var(--dim); }
   .chip.reviewing { background: #f29a4a; color: #2a1400; }
+  .chip.asleep { background: #2b3550; color: var(--blue); }
+
+  /* supervision: the countdown to sleep, and the operator's buttons (only with ?operator in the address) */
+  .sleep { font: 600 12px var(--mono); color: var(--dim); white-space: nowrap; }
+  .sleep.soon { color: var(--yellow); } .sleep.asleep { color: var(--blue); }
+  .ops { display: flex; align-items: center; gap: 6px; }
+  .ops[hidden] { display: none; }
+  .ops button { font: 700 11px var(--mono); letter-spacing: .04em; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+                border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+  .ops button:hover { border-color: var(--blue); }
+  .ops button.wake { background: var(--green); color: #062014; border-color: var(--green); }
+  .ops input { font: 12px var(--mono); width: 130px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+               background: var(--bg); color: var(--text); }
+  .ops .msg { font: 11px var(--mono); color: var(--red); }
+  .asleepCover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+                 gap: 6px; background: rgba(8, 10, 16, .72); color: var(--blue); font: 700 22px var(--mono); letter-spacing: .12em; }
+  .asleepCover[hidden] { display: none; }
+  .asleepCover small { font: 13px var(--sans); color: var(--dim); letter-spacing: 0; }
   .countdown { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
   .countdown div { height: 100%; width: 0; background: var(--blue); transition: width 1s linear; }
   .stats { display: flex; gap: 16px; margin-left: auto; flex-wrap: wrap; }
@@ -169,6 +187,14 @@
   <span class="chip idle" id="phase">idle</span>
   <div class="countdown" title="time until the agent acts"><div id="countdown"></div></div>
   <span class="meta" id="countdownText"></span>
+  <span class="sleep" id="sleep" title="the agent plays for a set time, then sleeps until the operator wakes it"></span>
+  <span class="ops" id="ops" hidden>
+    <button id="opReset" title="start the awake period again from now">Reset timer</button>
+    <button id="opSleep" title="go to sleep after the current move">Sleep now</button>
+    <button id="opWake" class="wake" title="wake up and play for another awake period">Wake</button>
+    <input id="opPassword" type="password" placeholder="operator password" autocomplete="current-password" hidden>
+    <span class="msg" id="opMsg"></span>
+  </span>
   <div class="stats">
     <div class="stat"><b id="s-attempts">0</b><span>attempts</span></div>
     <div class="stat"><b id="s-best">0</b><span>best run (moves)</span></div>
@@ -184,7 +210,7 @@
 <main>
   <section class="panel" id="screenPanel">
     <h2>Emulator <small>ZX Spectrum 48K · Fuse</small></h2>
-    <div class="screen"><canvas id="screen" width="320" height="240" aria-label="The emulator screen"></canvas><span class="badge live" id="badge">LIVE</span></div>
+    <div class="screen"><canvas id="screen" width="320" height="240" aria-label="The emulator screen"></canvas><span class="badge live" id="badge">LIVE</span><div class="asleepCover" id="asleepCover" hidden>ASLEEP<small>The game is frozen until the operator wakes the agent.</small></div></div>
   </section>
 
   <section class="panel" id="gamePanel">
@@ -244,7 +270,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const MARK = {works: "✔", fails: "✖", unsure: "?"};
 const VERDICT = {met: "✔", partly: "≈", not_met: "✖", "n/a": "·"};
-const PHASE = {thinking: "THINKING", explaining: "EXPLAINING", acting: "ACTING", loading: "LOADING GAME", reflecting: "REFLECTING", reviewing: "STEPPING BACK", idle: "IDLE"};
+const PHASE = {asleep: "ASLEEP", thinking: "THINKING", explaining: "EXPLAINING", acting: "ACTING", loading: "LOADING GAME", reflecting: "REFLECTING", reviewing: "STEPPING BACK", idle: "IDLE"};
 let after = 0, interval = 120, phase = "idle", actAt = 0, currentPlace = "", map = {nodes: {}, edges: []};
 let viewing = null, frames = {}, journalEmpty = true, gameEmpty = true, lastMove = 0;
 let draft = "", thoughts = "", thinkingMove = 0;
@@ -610,6 +636,7 @@ async function refreshState() {
   try {
     const st = await (await fetch("/api/state")).json();
     interval = st.interval; map = st.map; entities = st.entities || entities;
+    if (st.status && st.status.supervision) showSupervision(st.status.supervision);
     showStats(st.stats); showLessons(st.lessons, st.experiments);
     $("c-lessons").textContent = st.lessons.length + (entities.gameplay || []).length;
     showPeople(); showPlaces(); showObjects(); showGameplay();
@@ -632,6 +659,7 @@ function handle(ev, live) {
       if (ev.move === 1 && ev.lines.length) gameLog(ev.lines.map(l => `<div class="line">${esc(l)}</div>`).join(""));
       break;
     case "glyphs": break;
+    case "supervision": showSupervision(ev); break;
     case "escalate":
       // The move model's answer is set aside; the main model's stream starts afresh.
       draft = ""; thoughts = "";
@@ -677,6 +705,53 @@ function handle(ev, live) {
     if (live) setTimeout(() => document.querySelectorAll(".gamelog .fresh").forEach(e => e.classList.remove("fresh")), 8000);
   }
 }
+
+// ---------- supervision: countdown to sleep, and the operator's buttons ----------
+let supervision = {asleep: false, sleep_at: null};
+function showSupervision(s) {
+  if (!s) return;
+  supervision = s;
+  $("asleepCover").hidden = !s.asleep;
+  $("opWake").hidden = !s.asleep;
+  $("opSleep").hidden = $("opReset").hidden = !!s.asleep;
+  tickSleep();
+}
+function tickSleep() {
+  const el = $("sleep"), s = supervision;
+  if (s.asleep) { el.className = "sleep asleep"; el.textContent = "asleep"; return; }
+  if (!s.sleep_at) { el.className = "sleep"; el.textContent = ""; return; }
+  const left = Math.max(0, Math.round(s.sleep_at - Date.now() / 1000));
+  const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, "0");
+  el.className = "sleep" + (left < 300 ? " soon" : "");
+  el.textContent = left ? `sleeps in ${mm}:${ss}` : "sleeping after this move";
+}
+setInterval(tickSleep, 1000);
+
+const OPERATOR = new URLSearchParams(location.search).has("operator");
+$("ops").hidden = !OPERATOR;
+function savedPassword() { try { return localStorage.getItem("hobbitOperator") || ""; } catch (e) { return ""; } }
+async function control(action) {
+  const field = $("opPassword"), given = field.value || savedPassword();
+  $("opMsg").textContent = "";
+  try {
+    const r = await fetch("/api/control", {method: "POST", body: JSON.stringify({action}),
+      headers: {"Content-Type": "application/json", ...(given ? {Authorization: "Bearer " + given} : {})}});
+    if (r.status === 401) {
+      field.hidden = false; field.focus();
+      $("opMsg").textContent = given ? "wrong password" : "password needed";
+      try { localStorage.removeItem("hobbitOperator"); } catch (e) {}
+      return;
+    }
+    if (!r.ok) { $("opMsg").textContent = (await r.json()).error || "failed"; return; }
+    if (given) { try { localStorage.setItem("hobbitOperator", given); } catch (e) {} }
+    field.hidden = true; field.value = "";
+    showSupervision(await r.json());
+  } catch (e) { $("opMsg").textContent = "no connection"; }
+}
+$("opReset").onclick = () => control("reset");
+$("opSleep").onclick = () => control("sleep");
+$("opWake").onclick = () => control("wake");
+$("opPassword").addEventListener("keydown", e => { if (e.key === "Enter") control(supervision.asleep ? "wake" : "reset"); });
 
 async function poll() {
   for (;;) {

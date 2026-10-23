@@ -9,3 +9,6 @@ data/agent-cwd/
 data/*.json
 sessions/
 logs/
+
+# server settings with keys
+deploy/hobbit.env

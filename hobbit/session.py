@@ -47,9 +47,60 @@ class Runner:
         self.status: dict = {"phase": "idle"}
         self.stalled, self.advice = 0, ""      # moves in a row without progress, and the stuck review's plan
         self._stop = threading.Event()
+        # Supervision: the agent plays for awake_minutes, then sleeps (game frozen, no model calls)
+        # until the operator wakes it. Resetting starts the hour again.
+        self._woken = threading.Event()
+        self.asleep = cfg.start_asleep
+        self.sleep_at = None if cfg.start_asleep else self._hour_from_now()
+        self._publish_supervision()
 
     def stop(self) -> None:
         self._stop.set()
+        self._woken.set()
+
+    # -- supervision -----------------------------------------------------
+
+    def _hour_from_now(self) -> float | None:
+        return time.time() + self.cfg.awake_minutes * 60 if self.cfg.awake_minutes > 0 else None
+
+    def _publish_supervision(self) -> None:
+        state = {"asleep": self.asleep, "sleep_at": self.sleep_at, "awake_minutes": self.cfg.awake_minutes}
+        self.status = {**self.status, "supervision": state}
+        self.events.emit("supervision", **state)
+
+    def control(self, action: str) -> dict:
+        """The operator's buttons: 'reset' (another full awake period), 'sleep' (after this move), 'wake'."""
+        if action == "reset":
+            self.sleep_at = self._hour_from_now()
+        elif action == "sleep":
+            self.sleep_at = time.time()
+        elif action == "wake":
+            self.asleep, self.sleep_at = False, self._hour_from_now()
+            self._woken.set()
+        else:
+            raise ValueError(f"unknown action {action!r}")
+        log.info("operator: %s", action)
+        self._publish_supervision()
+        return self.status["supervision"]
+
+    def _doze_if_due(self) -> None:
+        """Between moves: if the awake period is over, freeze the game and wait to be woken."""
+        if not self.asleep and (self.sleep_at is None or time.time() < self.sleep_at):
+            return
+        if not self.asleep:
+            self.asleep = True
+            self._publish_supervision()
+        try:
+            self.rig.pause()
+        except RigError:
+            pass                                    # no emulator yet (before the first attempt)
+        before = self.status.get("phase", "idle")
+        self._phase("asleep")
+        log.info("asleep until the operator wakes it")
+        while self.asleep and not self._stop.is_set():
+            self._woken.wait(1.0)
+            self._woken.clear()
+        self._phase(before if before != "asleep" else "idle")
 
     def _phase(self, phase: str, **extra) -> None:
         self.status = {**self.status, "phase": phase, **extra}
@@ -60,6 +111,9 @@ class Runner:
     def run(self, attempts: int | None = None) -> None:
         done = 0
         while not self._stop.is_set() and (attempts is None or done < attempts):
+            self._doze_if_due()
+            if self._stop.is_set():
+                break
             try:
                 self.attempt()
             except StopRun as exc:
@@ -79,7 +133,8 @@ class Runner:
                                       "move_interval_seconds": self.cfg.move_interval_seconds,
                                       "kb_version": self.store.kb.get("version", 0),
                                       "allow_human_hints": self.cfg.allow_human_hints})
-        self.status = {"attempt": number, "session": folder.id, "move": 0, "attempt_cost": 0.0}
+        self.status = {"attempt": number, "session": folder.id, "move": 0, "attempt_cost": 0.0,
+                       "supervision": self.status.get("supervision")}
         self.events.emit("attempt_start", attempt=number, session=folder.id)
         self._phase("loading")
 
@@ -133,6 +188,7 @@ class Runner:
         self.stalled, self.advice = 0, ""
 
         for n in range(1, self.cfg.max_moves_per_attempt + 1):
+            self._doze_if_due()
             if self._stop.is_set():
                 return "aborted", moves, recalled
             t0 = time.monotonic()
