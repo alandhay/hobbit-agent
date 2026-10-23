@@ -12,6 +12,11 @@ ENV=deploy/hobbit.env
 [ -f "$ENV" ] || { echo "create $ENV first (copy deploy/hobbit.env.example)"; exit 1; }
 [ -f data/game/hobbit.tzx ] || { echo "data/game/hobbit.tzx is missing"; exit 1; }
 grep -q "^ANTHROPIC_API_KEY=.." "$ENV" || echo "note: no ANTHROPIC_API_KEY in $ENV yet: the agent can sleep, but not play"
+sed -i 's/^\([A-Z_]*\)=[[:space:]]*/\1=/; s/[[:space:]]*$//' "$ENV"       # stray spaces around pasted keys
+if grep -q '^YOUTUBE_STREAM_KEY=rtmp' "$ENV"; then
+    echo "YOUTUBE_STREAM_KEY holds the server URL: it needs the stream key itself (YouTube Studio -> Go live -> Stream key)"
+    exit 1
+fi
 if ! grep -q '^HOBBIT_OPERATOR_PASSWORD=..' "$ENV"; then
     sed -i '/^HOBBIT_OPERATOR_PASSWORD=/d' "$ENV"
     echo "HOBBIT_OPERATOR_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')" >> "$ENV"
