@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import ctypes
+import ctypes.wintypes
 import io
 import logging
 import os
@@ -120,6 +121,36 @@ class BackgroundWindowEmulator(WindowEmulator):
         # path is not safe to run on two threads at once (GDI objects get mixed up).
         with self._capture_lock:
             return super()._capture_raw()
+
+    def _grab_printwindow(self, area: dict[str, int]) -> Image.Image:
+        # With display scaling above 100%, Fuse (which doesn't know about scaling) is enlarged by
+        # Windows on screen, but PrintWindow draws it at its own, unenlarged size in the top-left
+        # of a bitmap the size of the enlarged window. specbot cuts the client area out of that
+        # bitmap with enlarged offsets; hand it the unenlarged ones so the cut lands on Fuse's picture.
+        scale = self._dpi_scale()
+        if scale > 1.01:
+            import win32gui
+
+            win_left, win_top, _, _ = win32gui.GetWindowRect(self.hwnd)
+            area = {"left": win_left + round((area["left"] - win_left) / scale),
+                    "top": win_top + round((area["top"] - win_top) / scale),
+                    "width": round(area["width"] / scale), "height": round(area["height"] / scale)}
+        return super()._grab_printwindow(area)
+
+    def _dpi_scale(self) -> float:
+        """How much Windows enlarges the Fuse window: its client width as this (scaling-aware)
+        process sees it, over the width Fuse itself sees. 1.0 at 100% display scaling."""
+        user32 = ctypes.windll.user32
+        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        actual, apparent = ctypes.wintypes.RECT(), ctypes.wintypes.RECT()
+        user32.GetClientRect(self.hwnd, ctypes.byref(actual))
+        previous = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))    # DPI_AWARENESS_CONTEXT_UNAWARE
+        try:
+            user32.GetClientRect(self.hwnd, ctypes.byref(apparent))
+        finally:
+            user32.SetThreadDpiAwarenessContext(previous)
+        return actual.right / apparent.right if apparent.right > 0 else 1.0
 
     def _press_chord(self, chord: Chord, hold_frames: int) -> None:
         self._player.play(chord, hold_frames)        # no need to bring the window to the front
