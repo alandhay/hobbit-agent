@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             from .broadcast import Broadcast
 
             broadcast = Broadcast(f"http://127.0.0.1:{cfg.port}/?broadcast", target, lambda: rig.audio,
-                                  cfg.data.parent / "logs")
+                                  cfg.data.parent / "logs", wanted=runner.wants_broadcast)
             broadcast.start()
         try:
             runner.run(args.attempts)

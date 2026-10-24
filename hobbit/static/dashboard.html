@@ -717,7 +717,7 @@ function showSupervision(s) {
   // Out of API credit gets its own words; otherwise the reason it went to sleep, if any.
   const noCredit = /out of credit/i.test(s.reason || "");
   $("asleepTitle").textContent = noCredit ? "GAMEPLAY PAUSED, OUT OF CREDITS" : "ASLEEP";
-  $("asleepWhy").textContent = noCredit ? "It carries on from the same move once the API account is topped up." :
+  $("asleepWhy").textContent = noCredit ? "It checks every 5 minutes and carries on from the same move once the API account is topped up." :
     (s.reason && s.reason !== "started asleep" ? s.reason[0].toUpperCase() + s.reason.slice(1) + ". " : "") +
     "The game is frozen until the operator wakes the agent.";
   $("opWake").hidden = !s.asleep;
@@ -726,7 +726,13 @@ function showSupervision(s) {
 }
 function tickSleep() {
   const el = $("sleep"), s = supervision;
-  if (s.asleep) { el.className = "sleep asleep"; el.textContent = /out of credit/i.test(s.reason || "") ? "paused: out of credits" : "asleep"; return; }
+  if (s.asleep) {
+    el.className = "sleep asleep";
+    const check = s.next_check ? Math.max(0, Math.round(s.next_check - Date.now() / 1000)) : null;
+    el.textContent = !/out of credit/i.test(s.reason || "") ? "asleep" :
+      "paused: out of credits" + (check === null ? " · checking now" : ` · checks again in ${Math.floor(check / 60)}:${String(check % 60).padStart(2, "0")}`);
+    return;
+  }
   if (!s.sleep_at) { el.className = "sleep"; el.textContent = ""; return; }
   const left = Math.max(0, Math.round(s.sleep_at - Date.now() / 1000));
   const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, "0");

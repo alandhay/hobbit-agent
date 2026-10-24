@@ -198,3 +198,43 @@ def test_out_of_credit_sleeps_at_once_and_retries_the_move_when_woken():
     assert r.rig.paused and not r.asleep
     sleeps = [e for e in r.events.since(0, 0) if e["kind"] == "supervision" and e["asleep"]]
     assert sleeps and "out of credit" in sleeps[0]["reason"]
+
+
+def test_paused_for_credit_checks_again_by_itself_and_keeps_the_time_left(monkeypatch):
+    import time
+    import hobbit.session as session
+    from hobbit.brain import OutOfCredit
+    monkeypatch.setattr(session, "CREDIT_CHECK_S", 0.2)
+    calls = []
+
+    class Brain:
+        def decide(self, context, png, on_stream, model):
+            calls.append(time.time())
+            if len(calls) < 3:                 # no credit for the first call and the first check
+                raise OutOfCredit("Credit balance is too low")
+            return {"ok": True}, {"model": model}
+
+    r = _runner(awake_minutes=60)
+    r.brain = Brain()
+    r.sleep_at = time.time() + 600             # ten minutes of awake time left
+    decision, _ = r._decide(1, "context", b"png", "claude-haiku-5-5")
+    assert decision == {"ok": True} and len(calls) == 3   # carried on without the operator
+    assert not r.asleep and r.next_check is None
+    assert 590 < r.sleep_at - time.time() <= 600          # with the ten minutes it had left
+
+
+def test_broadcast_stops_five_minutes_into_sleep_but_not_while_paused_for_credit():
+    import time
+    import hobbit.session as session
+    r = _runner(awake_minutes=60)
+    assert r.wants_broadcast()
+    r.control("sleep")
+    r._sleep_now("the awake period is over")
+    assert r.wants_broadcast()                             # within the grace period
+    r.asleep_since = time.time() - session.STREAM_GRACE_S - 1
+    assert not r.wants_broadcast()
+    r.control("wake")
+    assert r.wants_broadcast()
+    r._sleep_now(session.NO_CREDIT)
+    r.asleep_since = time.time() - 3600
+    assert r.wants_broadcast()                             # viewers see "out of credits"

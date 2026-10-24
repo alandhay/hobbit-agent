@@ -24,6 +24,9 @@ GAMEPLAY_IN_CONTEXT = 25       # most recent facts about how the game works give
 END_CONFIRMATIONS = 2          # game_over / won must be reported this many moves running
 WARN_STALLED = 5               # tell the agent how long it has gone without progress after this many moves
 STUCK_TRIED = 30               # moves in the stuck review's material
+CREDIT_CHECK_S = 300           # paused for lack of API credit: try again this often
+STREAM_GRACE_S = 300           # asleep this long (other than for credit), the broadcast stops until it wakes
+NO_CREDIT = "the API account is out of credit"
 KIND_MARK = {"works": "✔", "fails": "✖", "unsure": "?"}
 
 
@@ -53,6 +56,9 @@ class Runner:
         self.asleep = cfg.start_asleep
         self.sleep_reason = "started asleep" if cfg.start_asleep else ""
         self.sleep_at = None if cfg.start_asleep else self._hour_from_now()
+        self.next_check: float | None = None    # paused for credit: when it tries again
+        self._credit_left: float | None = None  # awake time that was left when the credit ran out
+        self.asleep_since: float | None = None
         self._publish_supervision()
 
     def stop(self) -> None:
@@ -65,8 +71,13 @@ class Runner:
         return time.time() + self.cfg.awake_minutes * 60 if self.cfg.awake_minutes > 0 else None
 
     def _publish_supervision(self) -> None:
+        if self.asleep and self.asleep_since is None:
+            self.asleep_since = time.time()
+        elif not self.asleep:
+            self.asleep_since = None
         state = {"asleep": self.asleep, "sleep_at": self.sleep_at, "awake_minutes": self.cfg.awake_minutes,
-                 "reason": self.sleep_reason if self.asleep else ""}
+                 "reason": self.sleep_reason if self.asleep else "",
+                 "next_check": self.next_check if self.asleep else None}
         self.status = {**self.status, "supervision": state}
         self.events.emit("supervision", **state)
 
@@ -90,11 +101,36 @@ class Runner:
         """Go to sleep at once (not after the move), e.g. when the API account has run out of credit."""
         log.warning("going to sleep: %s", reason)
         self.events.emit("error", text=f"going to sleep: {reason}")
+        if reason.startswith(NO_CREDIT) and self.sleep_at:
+            self._credit_left = max(60.0, self.sleep_at - time.time())
         self.asleep, self.sleep_at, self.sleep_reason = True, None, reason
         self._publish_supervision()
 
+    @property
+    def out_of_credit(self) -> bool:
+        return self.asleep and self.sleep_reason.startswith(NO_CREDIT)
+
+    def wants_broadcast(self) -> bool:
+        """Stream while playing, while paused for credit (viewers see why), and for STREAM_GRACE_S after
+        going to sleep; after that the stream stops until the agent is woken."""
+        return (not self.asleep or self.out_of_credit
+                or time.time() - (self.asleep_since or time.time()) < STREAM_GRACE_S)
+
+    def _credit_is_back(self) -> None:
+        """A model call worked while paused for credit: carry on with the awake time that was left."""
+        left, self._credit_left = self._credit_left, None
+        self.asleep, self.sleep_reason, self.next_check = False, "", None
+        self.sleep_at = time.time() + left if left else self._hour_from_now()
+        log.info("API credit is back: carrying on")
+        self.events.emit("notice", text="API credit is back: carrying on")
+        self._publish_supervision()
+
     def _doze_if_due(self) -> None:
-        """Between moves: if the awake period is over, freeze the game and wait to be woken."""
+        """Between moves: if the awake period is over, freeze the game and wait to be woken.
+
+        Paused for lack of credit, it waits only CREDIT_CHECK_S and then returns, still asleep, so the
+        next model call checks the account: if that call works the agent carries on by itself.
+        """
         if not self.asleep and (self.sleep_at is None or time.time() < self.sleep_at):
             return
         if not self.asleep:
@@ -107,11 +143,18 @@ class Runner:
             pass                                    # no emulator yet (before the first attempt)
         before = self.status.get("phase", "idle")
         self._phase("asleep")
-        log.info("asleep until the operator wakes it")
-        while self.asleep and not self._stop.is_set():
+        check = self.out_of_credit
+        if check:
+            self.next_check = time.time() + CREDIT_CHECK_S
+            self._publish_supervision()
+            log.info("paused for API credit; trying again in %d s", CREDIT_CHECK_S)
+        else:
+            log.info("asleep until the operator wakes it")
+        while self.asleep and not self._stop.is_set() and not (check and time.time() >= self.next_check):
             self._woken.wait(1.0)
             self._woken.clear()
-        self._phase(before if before != "asleep" else "idle")
+        self.next_check = None
+        self._phase(before if before not in ("asleep", "idle") else ("thinking" if check else "idle"))
 
     def _phase(self, phase: str, **extra) -> None:
         self.status = {**self.status, "phase": phase, **extra}
@@ -343,7 +386,7 @@ class Runner:
         except BrainError as exc:
             self.events.emit("error", move=n, text=f"stuck review failed: {exc}")
             if isinstance(exc, OutOfCredit):
-                self._sleep_now("the API account is out of credit")
+                self._sleep_now(NO_CREDIT)
             return None
         self.store.add_cost(record["cost_usd"])
         self.status["attempt_cost"] = round(self.status.get("attempt_cost", 0.0) + record["cost_usd"], 4)
@@ -414,14 +457,16 @@ class Runner:
             try:
                 decision, record = self.brain.decide(context, png, on_stream, model)
                 flush()
+                if self.out_of_credit:
+                    self._credit_is_back()
                 return decision, record
             except OutOfCredit as exc:
-                self._sleep_now(f"the API account is out of credit ({exc})")
-                self._doze_if_due()
+                if not self.out_of_credit:
+                    self._sleep_now(f"{NO_CREDIT} ({exc})")
+                self._doze_if_due()             # back after the operator wakes it, or CREDIT_CHECK_S
                 if self._stop.is_set():
                     raise
                 attempt = 0
-                self._phase("thinking", move=n)
                 continue
             except BrainError as exc:
                 self.events.emit("error", move=n, text=str(exc))
@@ -510,7 +555,7 @@ class Runner:
         except BrainError as exc:
             self.events.emit("error", text=f"reflection failed: {exc}")
             if isinstance(exc, OutOfCredit):
-                self._sleep_now("the API account is out of credit")
+                self._sleep_now(NO_CREDIT)
             return ""
         self.store.add_cost(record["cost_usd"])
         self.store.save_kb(kb)

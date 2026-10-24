@@ -32,7 +32,8 @@ bash deploy/push.sh <server-ip>       # install or update (sends the committed c
 
 - Dashboard: `https://<ip-with-dashes>.sslip.io/`. Add `?operator` for the buttons (Reset timer, Sleep now, Wake); they ask for `HOBBIT_OPERATOR_PASSWORD` from `deploy/hobbit.env`.
 - It is **supervised**: the service starts asleep (game frozen, no model calls). Wake plays for `awake_minutes` (60), counting down on the page, then it sleeps again. Reset timer starts the hour again.
-- The broadcast (Chrome showing the dashboard, plus the game's sound) goes to YouTube whenever `YOUTUBE_STREAM_KEY` is set, asleep or awake.
+- The broadcast (Chrome showing the dashboard, plus the game's sound) goes to YouTube when `YOUTUBE_STREAM_KEY` is set. It stops 5 minutes after the agent goes to sleep and starts again when it wakes.
+- Out of API credit: it pauses at once ("Gameplay paused, out of credits" on the stream, which stays up), tries again every 5 minutes, and carries on by itself, same move and the awake time it had left, once the account is topped up.
 - From this PC without the page: `bash deploy/control.sh <ip> status|wake|sleep|reset|restart|logs`.
 - Logs: `ssh ubuntu@<ip> sudo journalctl -u hobbit -f`; ffmpeg's warnings in `/var/lib/hobbit/logs/ffmpeg.log`.
 

@@ -8,7 +8,9 @@ The sound is fed to ffmpeg at a steady real-time rate: what the emulator produce
 there is any, silence otherwise (the game is frozen most of the time, and then the
 emulator produces nothing). That keeps sound and picture in step.
 
-Chrome and ffmpeg are restarted if they stop. The stream key is never logged.
+Chrome and ffmpeg are restarted if they stop. The stream key is never logged. ``wanted`` says
+whether to stream at all: while the agent sleeps (after a grace period) ffmpeg is stopped, and it
+starts again when the agent wakes.
 """
 
 from __future__ import annotations
@@ -51,8 +53,9 @@ def _chrome() -> str:
 
 
 class Broadcast:
-    def __init__(self, page: str, target: str, audio: Callable[[], object | None], logs: Path) -> None:
-        self.page, self.target, self.audio, self.logs = page, target, audio, logs
+    def __init__(self, page: str, target: str, audio: Callable[[], object | None], logs: Path,
+                 wanted: Callable[[], bool] = lambda: True) -> None:
+        self.page, self.target, self.audio, self.logs, self.wanted = page, target, audio, logs, wanted
         self._secret = target.rsplit("/", 1)[-1] if target.startswith("rtmp") else ""
         self._xvfb: subprocess.Popen | None = None
         self._chrome: subprocess.Popen | None = None
@@ -68,7 +71,8 @@ class Broadcast:
         self._display = self._start_display()
         self._start_chrome()
         time.sleep(3.0)                         # let the page draw before the first frames go out
-        self._start_ffmpeg()
+        if self.wanted():
+            self._start_ffmpeg()
         threading.Thread(target=self._feed_sound, daemon=True, name="hobbit-sound").start()
         threading.Thread(target=self._watch, daemon=True, name="hobbit-broadcast").start()
         log.info("broadcasting the dashboard from display %s", self._display)
@@ -121,14 +125,34 @@ class Broadcast:
                 out.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
                 out.flush()
 
+    def _stop_ffmpeg(self) -> None:
+        with self._ffmpeg_lock:
+            proc, self._ffmpeg = self._ffmpeg, None
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
     def _watch(self) -> None:
-        """Restart Chrome or ffmpeg if either stops; back off if ffmpeg keeps failing (e.g. a wrong key)."""
+        """Start or stop the stream as ``wanted`` says; restart Chrome or ffmpeg if either stops, backing
+        off if ffmpeg keeps failing (e.g. a wrong key)."""
         backoff = 5.0
         while not self._stop.wait(5.0):
             if self._chrome and self._chrome.poll() is not None:
                 log.warning("broadcast: Chrome stopped (code %s); restarting it", self._chrome.returncode)
                 self._start_chrome()
-            if self._ffmpeg and self._ffmpeg.poll() is not None:
+            if not self.wanted():
+                if self._ffmpeg:
+                    log.info("broadcast: the agent is asleep; stopping the stream until it wakes")
+                    self._stop_ffmpeg()
+                continue
+            if self._ffmpeg is None:
+                log.info("broadcast: starting the stream")
+                backoff = 5.0
+                self._start_ffmpeg()
+            elif self._ffmpeg.poll() is not None:
                 log.warning("broadcast: ffmpeg stopped (code %s, see logs/ffmpeg.log); restarting in %.0f s",
                             self._ffmpeg.returncode, backoff)
                 if self._stop.wait(backoff):
