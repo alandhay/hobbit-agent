@@ -238,3 +238,24 @@ def test_broadcast_stops_five_minutes_into_sleep_but_not_while_paused_for_credit
     r._sleep_now(session.NO_CREDIT)
     r.asleep_since = time.time() - 3600
     assert r.wants_broadcast()                             # viewers see "out of credits"
+
+
+def test_a_win_pauses_the_session_and_records_the_stats(tmp_path):
+    import json
+    from hobbit.archive import SessionFolder, Store
+    from hobbit.session import Move
+    store = Store(tmp_path)
+    store.start_attempt()
+    r = _runner(awake_minutes=60)
+    r.store = store
+    r.status["attempt_cost"] = 1.234
+    folder = SessionFolder(tmp_path / "sessions", 1)
+    moves = [Move(i, {"kind": "type", "text": "EAST"}, "", "hall") for i in range(1, 43)]
+    r._celebrate(1, folder, started=0.0, moves=moves, recalled=3)
+    assert r.asleep and r.sleep_reason == "it won the game" and r.wants_broadcast()
+    v = r.status["victory"]
+    assert v["attempt"] == 1 and v["moves"] == 42 and v["attempt_cost_usd"] == 1.23 and v["recalled_moves"] == 3
+    assert json.loads((tmp_path / "stats.json").read_text())["wins"][0]["moves"] == 42
+    assert (folder.path / "victory.json").is_file()
+    r.control("wake")
+    assert r.victory is None and r.status["victory"] is None and not r.asleep

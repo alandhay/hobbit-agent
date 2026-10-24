@@ -51,6 +51,22 @@
                  gap: 6px; background: rgba(8, 10, 16, .72); color: var(--blue); font: 700 22px var(--mono); letter-spacing: .12em;
                  text-align: center; padding: 0 16px; }
   .asleepCover[hidden] { display: none; }
+  /* the win: a card over the whole page, until the operator wakes it */
+  .victory { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+             background: rgba(6, 8, 12, .86); padding: 16px; }
+  .victory[hidden] { display: none; }
+  .victory .card { width: min(880px, 100%); background: var(--panel); border: 1px solid var(--yellow); border-radius: 14px;
+                   padding: 28px 32px; box-shadow: 0 0 60px rgba(244, 207, 74, .18); text-align: center; }
+  .victory .kicker { font: 700 12px var(--mono); letter-spacing: .3em; color: var(--yellow); }
+  .victory h1 { margin: 8px 0 4px; font: 700 34px/1.15 var(--mono); letter-spacing: .04em; }
+  .victory .lede { color: var(--dim); font-size: 15px; margin-bottom: 22px; }
+  .victory .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .victory .grid div { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 8px; }
+  .victory .grid b { display: block; font: 700 24px/1.1 var(--mono); color: var(--text); }
+  .victory .grid span { font-size: 12px; color: var(--dim); }
+  .victory .grid .hero b { color: var(--yellow); font-size: 30px; }
+  .victory .foot { margin-top: 18px; font: 12px var(--mono); color: var(--faint); }
+  @media (max-width: 700px) { .victory .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .victory h1 { font-size: 24px; } }
   .asleepCover small { font: 13px var(--sans); color: var(--dim); letter-spacing: 0; }
   .countdown { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
   .countdown div { height: 100%; width: 0; background: var(--blue); transition: width 1s linear; }
@@ -181,6 +197,13 @@
 </style>
 </head>
 <body>
+<div class="victory" id="victory" hidden><div class="card">
+  <div class="kicker">★ GAME COMPLETED ★</div>
+  <h1 id="vTitle">The agent has won The Hobbit</h1>
+  <div class="lede" id="vLede"></div>
+  <div class="grid" id="vGrid"></div>
+  <div class="foot" id="vFoot"></div>
+</div></div>
 <header>
   <div class="brand"><span class="stripe"><i style="background:#e8312f"></i><i style="background:#f4cf4a"></i><i style="background:#5ad38a"></i><i style="background:#3fd8e8"></i></span>
     THE HOBBIT <small>an AI agent learning to play from first principles</small></div>
@@ -640,6 +663,7 @@ async function refreshState() {
     const st = await (await fetch("/api/state")).json();
     interval = st.interval; map = st.map; entities = st.entities || entities;
     if (st.status && st.status.supervision) showSupervision(st.status.supervision);
+    if (st.status) showVictory(st.status.victory || null);
     showStats(st.stats); showLessons(st.lessons, st.experiments);
     $("c-lessons").textContent = st.lessons.length + (entities.gameplay || []).length;
     showPeople(); showPlaces(); showObjects(); showGameplay();
@@ -662,7 +686,8 @@ function handle(ev, live) {
       if (ev.move === 1 && ev.lines.length) gameLog(ev.lines.map(l => `<div class="line">${esc(l)}</div>`).join(""));
       break;
     case "glyphs": break;
-    case "supervision": showSupervision(ev); break;
+    case "supervision": showSupervision(ev); if (!ev.asleep) showVictory(null); break;
+    case "victory": showVictory(ev); break;
     case "escalate":
       // The move model's answer is set aside; the main model's stream starts afresh.
       draft = ""; thoughts = "";
@@ -715,8 +740,8 @@ function showSupervision(s) {
   supervision = s;
   $("asleepCover").hidden = !s.asleep;
   // Out of API credit gets its own words; otherwise the reason it went to sleep, if any.
-  const noCredit = /out of credit/i.test(s.reason || "");
-  $("asleepTitle").textContent = noCredit ? "GAMEPLAY PAUSED, OUT OF CREDITS" : "ASLEEP";
+  const noCredit = /out of credit/i.test(s.reason || ""), won = /won the game/i.test(s.reason || "");
+  $("asleepTitle").textContent = noCredit ? "GAMEPLAY PAUSED, OUT OF CREDITS" : won ? "GAME COMPLETED" : "ASLEEP";
   $("asleepWhy").textContent = noCredit ? "It checks every 5 minutes and carries on from the same move once the API account is topped up." :
     (s.reason && s.reason !== "started asleep" ? s.reason[0].toUpperCase() + s.reason.slice(1) + ". " : "") +
     "The game is frozen until the operator wakes the agent.";
@@ -766,6 +791,28 @@ $("opReset").onclick = () => control("reset");
 $("opSleep").onclick = () => control("sleep");
 $("opWake").onclick = () => control("wake");
 $("opPassword").addEventListener("keydown", e => { if (e.key === "Enter") control(supervision.asleep ? "wake" : "reset"); });
+
+// ---------- the win ----------
+function showVictory(v) {
+  $("victory").hidden = !v;
+  if (!v) return;
+  const n = x => (x ?? 0).toLocaleString();
+  const span = m => m < 60 ? `${Math.round(m)}m` : `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, "0")}m`;
+  const models = Object.entries(v.moves_by_model || {}).map(([m, c]) => `${modelName(m)} ${c}`).join(" · ");
+  $("vTitle").textContent = `Won on attempt ${v.attempt}`;
+  $("vLede").textContent = `It played its way to the end of The Hobbit in ${n(v.moves)} moves (${span(v.minutes)} of play), ` +
+    `learning from ${v.attempts - 1} earlier attempt${v.attempts === 2 ? "" : "s"}.`;
+  const tiles = [["hero", v.attempt, "attempt"], ["hero", n(v.moves), "moves to win"], ["hero", span(v.minutes), "time this attempt"],
+    ["hero", `$${(v.attempt_cost_usd || 0).toFixed(2)}`, "cost this attempt"],
+    ["", n(v.deaths_before), "deaths along the way"], ["", n(v.moves_all_attempts), "moves, all attempts"],
+    ["", n(v.places), "places mapped"], ["", n(v.characters), "characters met"],
+    ["", n(v.objects), "objects found"], ["", n(v.lessons), "lessons learned"],
+    ["", v.predictions_right == null ? "–" : `${v.predictions_right}%`, "predictions right"],
+    ["", `$${(v.cost_total_usd || 0).toFixed(2)}`, "spent, all attempts"]];
+  $("vGrid").innerHTML = tiles.map(([c, b, s]) => `<div class="${c}"><b>${esc(String(b))}</b><span>${esc(s)}</span></div>`).join("");
+  $("vFoot").textContent = (models ? `moves by model: ${models} · ` : "") +
+    `moves where it admitted remembering the game: ${n(v.recalled_moves)} · won ${new Date(v.won_at * 1000).toLocaleString()}`;
+}
 
 async function poll() {
   for (;;) {

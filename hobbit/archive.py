@@ -130,6 +130,7 @@ class Store:
         self.stats.setdefault("predictions", {})
         self.stats.setdefault("moves_by_model", {})
         self.stats.setdefault("escalations", {})
+        self.stats.setdefault("wins", [])
         self.kb = _read_json(data / "kb.json", {"lessons": [], "experiments": [], "version": 0})
         self.map = _read_json(data / "map.json", {"nodes": {}, "edges": []})
         self.entities = _read_json(data / "entities.json", {})
@@ -161,6 +162,11 @@ class Store:
                 key = reason.split(" (")[0] if reason.startswith("low confidence") else reason
                 key = "no progress" if key.startswith("no progress for") else key
                 self.stats["escalations"][key] = self.stats["escalations"].get(key, 0) + 1
+            _write_json(self.data / "stats.json", self.stats)
+
+    def add_win(self, victory: dict) -> None:
+        with self._lock:
+            self.stats["wins"].append(victory)
             _write_json(self.data / "stats.json", self.stats)
 
     def start_attempt(self) -> int:

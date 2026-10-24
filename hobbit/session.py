@@ -27,6 +27,7 @@ STUCK_TRIED = 30               # moves in the stuck review's material
 CREDIT_CHECK_S = 300           # paused for lack of API credit: try again this often
 STREAM_GRACE_S = 300           # asleep this long (other than for credit), the broadcast stops until it wakes
 NO_CREDIT = "the API account is out of credit"
+WON = "it won the game"
 KIND_MARK = {"works": "✔", "fails": "✖", "unsure": "?"}
 
 
@@ -59,6 +60,7 @@ class Runner:
         self.next_check: float | None = None    # paused for credit: when it tries again
         self._credit_left: float | None = None  # awake time that was left when the credit ran out
         self.asleep_since: float | None = None
+        self.victory: dict | None = None        # the winning stats, shown until the operator wakes it
         self._publish_supervision()
 
     def stop(self) -> None:
@@ -90,6 +92,8 @@ class Runner:
             self.sleep_at = time.time()
         elif action == "wake":
             self.asleep, self.sleep_at, self.sleep_reason = False, self._hour_from_now(), ""
+            self.victory = None
+            self.status = {**self.status, "victory": None}
             self._woken.set()
         else:
             raise ValueError(f"unknown action {action!r}")
@@ -100,7 +104,7 @@ class Runner:
     def _sleep_now(self, reason: str) -> None:
         """Go to sleep at once (not after the move), e.g. when the API account has run out of credit."""
         log.warning("going to sleep: %s", reason)
-        self.events.emit("error", text=f"going to sleep: {reason}")
+        self.events.emit("notice" if reason == WON else "error", text=f"going to sleep: {reason}")
         if reason.startswith(NO_CREDIT) and self.sleep_at:
             self._credit_left = max(60.0, self.sleep_at - time.time())
         self.asleep, self.sleep_at, self.sleep_reason = True, None, reason
@@ -113,7 +117,7 @@ class Runner:
     def wants_broadcast(self) -> bool:
         """Stream while playing, while paused for credit (viewers see why), and for STREAM_GRACE_S after
         going to sleep; after that the stream stops until the agent is woken."""
-        return (not self.asleep or self.out_of_credit
+        return (not self.asleep or self.out_of_credit or self.victory is not None
                 or time.time() - (self.asleep_since or time.time()) < STREAM_GRACE_S)
 
     def _credit_is_back(self) -> None:
@@ -220,6 +224,8 @@ class Runner:
         if outcome != "aborted":
             self.store.end_attempt(outcome, len(moves), recalled)
         self.events.emit("outcome", attempt=number, outcome=outcome, moves=len(moves))
+        if outcome.startswith("success"):
+            self._celebrate(number, folder, started, moves, recalled)
         summary = self._reflect(folder, outcome, moves) if outcome != "aborted" and moves else ""
         folder.write("session.json", {"id": folder.id, "attempt": number, "started": started, "ended": time.time(),
                                       "outcome": outcome, "moves": len(moves), "recalled": recalled,
@@ -564,6 +570,30 @@ class Runner:
                          version=self.store.kb["version"])
         return kb.get("summary", "")
 
+    def _celebrate(self, number: int, folder: SessionFolder, started: float, moves: list[Move], recalled: int) -> None:
+        """It won: pause the session and put the winning stats on the dashboard (and the stream)."""
+        s = self.store.stats
+        p = s["predictions"]
+        judged = p.get("met", 0) + p.get("partly", 0) + p.get("not_met", 0)
+        self.victory = {
+            "attempt": number, "moves": len(moves), "minutes": round((time.time() - started) / 60, 1),
+            "attempt_cost_usd": round(self.status.get("attempt_cost", 0.0), 2),
+            "attempts": s["attempts"], "deaths_before": s["outcomes"].get("fail:death", 0),
+            "moves_all_attempts": s["moves_total"], "places": len(self.store.map["nodes"]),
+            "characters": len(self.store.entities["characters"]), "objects": len(self.store.entities["objects"]),
+            "lessons": len(self.store.top_lessons(1000)),
+            "predictions_right": round(100 * p.get("met", 0) / judged) if judged else None,
+            "moves_by_model": dict(s["moves_by_model"]), "recalled_moves": recalled,
+            "cost_total_usd": round(s["cost_usd_total"], 2), "session": folder.id, "won_at": time.time(),
+        }
+        self.store.add_win(self.victory)
+        folder.write("victory.json", self.victory)
+        folder.add_transcript(f"[won] attempt {number} in {len(moves)} moves")
+        log.info("WON: attempt %d in %d moves", number, len(moves))
+        self.status = {**self.status, "victory": self.victory}
+        self.events.emit("victory", **self.victory)
+        self._sleep_now(WON)
+
     def stats(self) -> dict:
         s = self.store.stats
         return {"attempts": s["attempts"], "outcomes": s["outcomes"], "best_moves": s["best_moves"],
@@ -573,7 +603,7 @@ class Runner:
                 "gameplay": len(self.store.entities["gameplay"]), "cost_today": round(self.store.cost_today(), 2),
                 "recalled_total": s["recalled_total"], "glyphs": len(self.book.glyphs),
                 "predictions": s["predictions"], "moves_by_model": s["moves_by_model"],
-                "escalations": s["escalations"]}
+                "escalations": s["escalations"], "wins": len(s["wins"])}
 
 
 def escalate_before(n: int, moves: list[Move], stalled: int) -> list[str]:
